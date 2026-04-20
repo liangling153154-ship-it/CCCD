@@ -18,7 +18,6 @@
     .btn-scan { background: #1a73e8; color: white; }
     .btn-scan:active { background: #1557b0; }
     
-    /* Nút Tải ảnh lên */
     .btn-upload-label { background: #34a853; color: white; display: block; text-align: center; width: 100%; padding: 14px; font-size: 16px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; margin-bottom: 8px; }
     .btn-upload-label:active { background: #2d8e47; }
     
@@ -27,10 +26,10 @@
     .btn-switch { background: #fbbc04; color: #333; flex: 1; margin-bottom: 0; }
     
     #reader { margin: 12px 0; border-radius: 8px; overflow: hidden; border: none !important; }
-    #status { padding: 14px; border-radius: 8px; display: none; margin-top: 12px; font-size: 15px; line-height: 1.6; }
-    .success { background: #e8f5e9; border-left: 4px solid #43a047; }
-    .error   { background: #ffebee; border-left: 4px solid #e53935; }
-    .loading { background: #e8f0fe; border-left: 4px solid #1a73e8; }
+    #status { padding: 16px; border-radius: 8px; display: none; margin-top: 12px; font-size: 15px; line-height: 1.6; transition: 0.3s; }
+    .success { background: #e8f5e9; border-left: 4px solid #43a047; color: #1e4620; }
+    .error   { background: #ffebee; border-left: 4px solid #e53935; color: #b71c1c; }
+    .loading { background: #e8f0fe; border-left: 4px solid #1a73e8; color: #0d47a1; }
   </style>
 </head>
 <body>
@@ -56,16 +55,15 @@
 </div>
 
 <script>
-  // QUAN TRỌNG: DÁN ĐƯỜNG LINK GOOGLE APPS SCRIPT CỦA BẠN VÀO ĐÂY
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbzW5SfriqLXKG9vGLHW-0EyCzVD_B3OXimJT_4-6b-C-QN-lbqJOdl0qiCkQ4ZPVt8_FA/exec';
+  // ⚠️ ĐỪNG QUÊN DÁN LẠI LINK GOOGLE APPS SCRIPT VÀO ĐÂY NHÉ
+  const GAS_URL = 'YOUR_NEW_WEB_APP_URL_HERE';
 
   let scanner = null;
   let scanned = false;
   let cameras = [];
   let currentCamIdx = 0;
-  let isCameraRunning = false; // Biến kiểm soát trạng thái camera
+  let isCameraRunning = false;
 
-  // Thuật toán: Tìm mắt camera chính xác nhất
   function findMainCameraIndex(devices) {
     if (!devices || devices.length <= 1) return 0;
     let bestIdx = 0;
@@ -79,35 +77,44 @@
     return devices.length - 1;
   }
 
-  // --- XỬ LÝ TẢI ẢNH (MỚI) ---
+  // --- XỬ LÝ TẢI ẢNH (BẢN NÂNG CẤP THÔNG BÁO) ---
   function handleFileUpload(event) {
     const room = document.getElementById('room').value.trim();
     if (!room) { 
       alert('Vui lòng nhập số phòng trước!'); 
-      event.target.value = ''; // Reset file
+      event.target.value = ''; 
       return; 
     }
     if (event.target.files.length === 0) return;
 
     const imageFile = event.target.files[0];
     scanned = false;
-    showStatus('⏳ Đang phân tích hình ảnh...', 'loading');
+    
+    // Bước 1: Báo đã nhận ảnh
+    showStatus(`📂 Đã nhận ảnh: <b>${imageFile.name}</b><br>⏳ Đang dò tìm mã QR...`, 'loading');
 
     if (!scanner) {
       scanner = new Html5Qrcode("reader");
     }
 
-    // Đọc mã QR từ file ảnh tĩnh
-    scanner.scanFile(imageFile, true)
+    // false: Không vẽ ảnh ra giao diện để tránh lỗi hiển thị
+    scanner.scanFile(imageFile, false)
       .then(decodedText => {
-        onScanSuccess(decodedText);
+        // Bước 2: Báo đọc thành công
+        showStatus('✅ <b>Đã quét được mã QR!</b> Đang chuẩn bị dữ liệu...', 'loading');
+        
+        // Tạo một khoảng dừng 0.5 giây để người dùng kịp đọc thông báo rồi mới gửi lên Sheets
+        setTimeout(() => {
+          onScanSuccess(decodedText);
+        }, 500);
       })
       .catch(err => {
-        showStatus('❌ Không tìm thấy mã QR trong ảnh. Vui lòng chụp rõ nét hơn và không bị lóa.', 'error');
+        showStatus('❌ <b>Không tìm thấy mã QR!</b><br>Hãy thử cắt (crop) ảnh gần lại mã vuông QR, hoặc chụp rõ nét hơn.', 'error');
+      })
+      .finally(() => {
+        // Chỉ reset ô file sau khi đã phân tích xong hoàn toàn
+        event.target.value = ''; 
       });
-
-    // Reset lại ô chọn file để có thể chọn lại ảnh cũ nếu cần
-    event.target.value = '';
   }
 
   // --- XỬ LÝ LIVE CAMERA ---
@@ -119,7 +126,7 @@
     document.getElementById('btnScan').style.display = 'none';
     document.getElementById('btnUpload').style.display = 'none';
     document.getElementById('actionButtons').style.display = 'flex';
-    showStatus('⏳ Đang phân tích các ống kính...', 'loading');
+    showStatus('⏳ Đang khởi động ống kính...', 'loading');
 
     if (!scanner) {
       scanner = new Html5Qrcode("reader");
@@ -173,31 +180,34 @@
         isCameraRunning = false;
       });
     }
+    // Dọn dẹp khung camera
+    document.getElementById('reader').innerHTML = '';
+    
     document.getElementById('btnScan').style.display = 'block';
     document.getElementById('btnUpload').style.display = 'block';
     document.getElementById('actionButtons').style.display = 'none';
   }
 
-  // --- XỬ LÝ KẾT QUẢ CHUNG ---
+  // --- XỬ LÝ ĐẨY LÊN SHEETS CHUNG CHO CẢ 2 CÁCH ---
   function onScanSuccess(text) {
     if (scanned) return;
     scanned = true;
-    stopScan(); // Tự động dừng camera/tắt các nút đang chạy
+    stopScan(); // Tắt giao diện camera nếu đang bật
 
     const parts = text.split('|');
     if (parts.length < 7) {
-      showStatus('❌ QR không hợp lệ. Vui lòng thử lại với ảnh CCCD chuẩn.', 'error');
+      showStatus('❌ <b>Mã QR không hợp lệ.</b><br>Định dạng này không phải là CCCD chuẩn của Việt Nam.', 'error');
       return;
     }
 
     const room = document.getElementById('room').value.trim();
+    
+    // Bước 3: Đang đẩy lên Sheets
     showStatus(`
       ✅ <b>Đọc CCCD thành công!</b><br>
-      👤 Họ tên: <b>${parts[2]}</b><br>
-      🪪 CCCD: ${parts[0]}<br>
-      🏠 Địa chỉ: ${parts[5]}<br>
-      🛏️ Phòng: ${room}<br>
-      <i>⏳ Đang đẩy dữ liệu lên máy chủ...</i>
+      👤 Khách: <b>${parts[2]}</b><br>
+      🏠 Nơi ở: ${parts[5]}<br>
+      <i>🚀 Đang truyền dữ liệu lên Google Sheets...</i>
     `, 'loading');
 
     fetch(GAS_URL, {
@@ -208,17 +218,20 @@
     .then(r => r.json())
     .then(data => {
       if (data.success) {
+        // Bước 4: Hoàn tất
         showStatus(`
-          ✅ <b>Đã lưu thành công!</b><br>
-          👤 ${data.name} — Phòng ${room}<br>
-          <small>Tiếp tục nhập số phòng để xử lý khách tiếp theo</small>
+          🎉 <b>LƯU SHEETS THÀNH CÔNG!</b><br>
+          👤 Đã nhập khách: <b>${data.name}</b><br>
+          🛏️ Phòng: <b>${room}</b><br>
+          <hr style="border: 0; border-top: 1px solid #c8e6c9; margin: 8px 0;">
+          <small>✨ Hệ thống đã sẵn sàng cho khách tiếp theo.</small>
         `, 'success');
-        document.getElementById('room').value = '';
+        document.getElementById('room').value = ''; // Reset phòng
       } else {
-        showStatus('❌ Lỗi máy chủ: ' + data.error, 'error');
+        showStatus('❌ Máy chủ Google báo lỗi: ' + data.error, 'error');
       }
     })
-    .catch(err => showStatus('❌ Lỗi kết nối mạng, vui lòng thử lại.', 'error'));
+    .catch(err => showStatus('❌ Lỗi mạng: Không thể kết nối với hệ thống Google Sheets.', 'error'));
   }
 
   function showStatus(msg, type) {
