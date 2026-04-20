@@ -1,5 +1,55 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Check-in CCCD - Sen's Homestay</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, sans-serif; max-width: 480px; margin: auto; padding: 20px; background: #f4f7f9; }
+    .card { background: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    h2 { color: #1a73e8; text-align: center; margin-bottom: 20px; }
+    label { font-weight: bold; display: block; margin-bottom: 6px; color: #555; }
+    input { width: 100%; padding: 14px; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 16px; }
+    input:focus { border-color: #1a73e8; outline: none; }
+    
+    button { width: 100%; padding: 14px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+    .btn-scan { background: #1a73e8; color: white; margin-bottom: 8px; }
+    .btn-scan:active { background: #1557b0; }
+    
+    .action-buttons { display: none; gap: 10px; margin-bottom: 8px; }
+    .btn-stop { background: #e53935; color: white; flex: 1; }
+    .btn-switch { background: #fbbc04; color: #333; flex: 1; }
+    
+    #reader { margin: 12px 0; border-radius: 8px; overflow: hidden; border: none !important; }
+    #status { padding: 14px; border-radius: 8px; display: none; margin-top: 12px; font-size: 15px; line-height: 1.6; }
+    .success { background: #e8f5e9; border-left: 4px solid #43a047; }
+    .error   { background: #ffebee; border-left: 4px solid #e53935; }
+    .loading { background: #e8f0fe; border-left: 4px solid #1a73e8; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>📋 Quét CCCD Nội Địa</h2>
+
+  <label>Số phòng:</label>
+  <input type="text" id="room" placeholder="Nhập số phòng (VD: 201)" autofocus />
+
+  <button class="btn-scan" onclick="startScan()">📷 Mở Camera Quét QR</button>
+  
+  <div class="action-buttons" id="actionButtons">
+    <button class="btn-stop" onclick="stopScan()">⏹ Dừng</button>
+    <button class="btn-switch" onclick="switchCamera()">🔄 Đổi Ống Kính</button>
+  </div>
+
+  <div id="reader"></div>
+  <div id="status"></div>
+</div>
+
 <script>
-  // DÁN ĐƯỜNG LINK GOOGLE APPS SCRIPT CỦA BẠN VÀO ĐÂY
+  // QUAN TRỌNG: DÁN ĐƯỜNG LINK GOOGLE APPS SCRIPT CỦA BẠN VÀO ĐÂY
   const GAS_URL = 'https://script.google.com/macros/s/AKfycbzW5SfriqLXKG9vGLHW-0EyCzVD_B3OXimJT_4-6b-C-QN-lbqJOdl0qiCkQ4ZPVt8_FA/exec';
 
   let scanner = null;
@@ -21,14 +71,14 @@
       // Bỏ qua góc rộng và chụp xa
       if (lbl.includes('ultra') || lbl.includes('wide') || lbl.includes('rộng') || lbl.includes('tele')) continue;
 
-      // Nếu tên camera có chữ 'back', 'sau' hoặc số '0' (mặc định Android) -> Lấy luôn
+      // Nếu tên camera có chữ 'back', 'sau' hoặc số '0' -> Lấy luôn
       if (lbl.includes('back') || lbl.includes('sau') || lbl.includes('0')) {
         return i;
       }
       bestIdx = i; // Lưu lại phương án dự phòng
     }
     
-    // MẸO DÀNH CHO IPHONE: Nếu thuật toán đọc tên thất bại, iPhone thường xếp mắt chính 1x ở vị trí cuối cùng trong danh sách
+    // Fallback cho iPhone: Thường mắt 1x nằm cuối cùng
     return devices.length - 1;
   }
 
@@ -49,7 +99,6 @@
     Html5Qrcode.getCameras().then(devices => {
       if (devices && devices.length > 0) {
         cameras = devices;
-        // Chạy thuật toán tìm mắt chính
         currentCamIdx = findMainCameraIndex(cameras);
         startWithCamera(cameras[currentCamIdx].id);
       } else {
@@ -145,3 +194,5 @@
     el.innerHTML = msg;
   }
 </script>
+</body>
+</html>
