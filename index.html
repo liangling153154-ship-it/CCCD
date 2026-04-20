@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Check-in CCCD - Sen's Homestay</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, sans-serif; max-width: 480px; margin: auto; padding: 20px; background: #f4f7f9; }
+    .card { background: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+    h2 { color: #1a73e8; text-align: center; margin-bottom: 20px; }
+    label { font-weight: bold; display: block; margin-bottom: 6px; color: #555; }
+    input { width: 100%; padding: 14px; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 16px; }
+    input:focus { border-color: #1a73e8; outline: none; }
+    button { width: 100%; padding: 14px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; margin-bottom: 8px; }
+    .btn-scan { background: #1a73e8; color: white; }
+    .btn-stop { background: #e53935; color: white; display: none; }
+    #reader { margin: 12px 0; border-radius: 8px; overflow: hidden; border: none !important; }
+    #status { padding: 14px; border-radius: 8px; display: none; margin-top: 12px; font-size: 15px; line-height: 1.6; }
+    .success { background: #e8f5e9; border-left: 4px solid #43a047; }
+    .error   { background: #ffebee; border-left: 4px solid #e53935; }
+    .loading { background: #e8f0fe; border-left: 4px solid #1a73e8; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>📋 Quét CCCD Nội Địa</h2>
+
+  <label>Số phòng:</label>
+  <input type="text" id="room" placeholder="Nhập số phòng (VD: 201)" autofocus />
+
+  <button class="btn-scan" onclick="startScan()">📷 Mở Camera Quét QR</button>
+  <button class="btn-stop" id="btnStop" onclick="stopScan()">⏹ Dừng Camera</button>
+
+  <div id="reader"></div>
+  <div id="status"></div>
+</div>
+
+<script>
+  // DÁN ĐƯỜNG LINK GOOGLE APPS SCRIPT MỚI CỦA BẠN VÀO ĐÂY
+  const GAS_URL = 'YOUR_NEW_WEB_APP_URL_HERE';
+
+  let scanner = null;
+  let scanned = false;
+
+  function startScan() {
+    const room = document.getElementById('room').value.trim();
+    if (!room) { alert('Vui lòng nhập số phòng trước!'); return; }
+
+    scanned = false;
+    showStatus('⏳ Đang khởi động camera...', 'loading');
+
+    scanner = new Html5Qrcode("reader");
+    scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      onScanSuccess,
+      () => {}
+    ).then(() => {
+      document.querySelector('.btn-scan').style.display = 'none';
+      document.getElementById('btnStop').style.display = 'block';
+      showStatus('📷 Hướng camera vào mã QR trên CCCD...', 'loading');
+    }).catch(err => {
+      showStatus('❌ Không mở được camera: ' + err, 'error');
+    });
+  }
+
+  function stopScan() {
+    if (scanner) {
+      scanner.stop().then(() => {
+        scanner.clear();
+        scanner = null;
+      });
+    }
+    document.querySelector('.btn-scan').style.display = 'block';
+    document.getElementById('btnStop').style.display = 'none';
+  }
+
+  function onScanSuccess(text) {
+    if (scanned) return;
+    scanned = true;
+    stopScan();
+
+    const parts = text.split('|');
+    if (parts.length < 7) {
+      showStatus('❌ QR không hợp lệ. Vui lòng quét lại CCCD.', 'error');
+      return;
+    }
+
+    const room = document.getElementById('room').value.trim();
+    showStatus(`
+      ✅ <b>Đọc CCCD thành công!</b><br>
+      👤 Họ tên: <b>${parts[2]}</b><br>
+      🪪 CCCD: ${parts[0]}<br>
+      🏠 Địa chỉ: ${parts[5]}<br>
+      🛏️ Phòng: ${room}<br>
+      <i>⏳ Đang đẩy dữ liệu lên máy chủ ASM...</i>
+    `, 'loading');
+
+    // Dùng text/plain để tránh lỗi CORS chặn tên miền của Google
+    fetch(GAS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ qrData: text, room: room })
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        showStatus(`
+          ✅ <b>Đã lưu thành công!</b><br>
+          👤 ${data.name} — Phòng ${room}<br>
+          <small>Tiếp tục nhập số phòng để quét khách tiếp theo</small>
+        `, 'success');
+        document.getElementById('room').value = '';
+      } else {
+        showStatus('❌ Lỗi từ máy chủ: ' + data.error, 'error');
+      }
+    })
+    .catch(err => showStatus('❌ Lỗi kết nối mạng, vui lòng thử lại.', 'error'));
+  }
+
+  function showStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.style.display = 'block';
+    el.className = type;
+    el.innerHTML = msg;
+  }
+</script>
+</body>
+</html>
