@@ -11,16 +11,20 @@
     .card { background: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
     h2 { color: #1a73e8; text-align: center; margin-bottom: 20px; }
     label { font-weight: bold; display: block; margin-bottom: 6px; color: #555; }
-    input { width: 100%; padding: 14px; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 16px; }
-    input:focus { border-color: #1a73e8; outline: none; }
+    input[type="text"] { width: 100%; padding: 14px; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 16px; }
+    input[type="text"]:focus { border-color: #1a73e8; outline: none; }
     
-    button { width: 100%; padding: 14px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; }
-    .btn-scan { background: #1a73e8; color: white; margin-bottom: 8px; }
+    button { width: 100%; padding: 14px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; margin-bottom: 8px; }
+    .btn-scan { background: #1a73e8; color: white; }
     .btn-scan:active { background: #1557b0; }
     
+    /* Nút Tải ảnh lên */
+    .btn-upload-label { background: #34a853; color: white; display: block; text-align: center; width: 100%; padding: 14px; font-size: 16px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; margin-bottom: 8px; }
+    .btn-upload-label:active { background: #2d8e47; }
+    
     .action-buttons { display: none; gap: 10px; margin-bottom: 8px; }
-    .btn-stop { background: #e53935; color: white; flex: 1; }
-    .btn-switch { background: #fbbc04; color: #333; flex: 1; }
+    .btn-stop { background: #e53935; color: white; flex: 1; margin-bottom: 0; }
+    .btn-switch { background: #fbbc04; color: #333; flex: 1; margin-bottom: 0; }
     
     #reader { margin: 12px 0; border-radius: 8px; overflow: hidden; border: none !important; }
     #status { padding: 14px; border-radius: 8px; display: none; margin-top: 12px; font-size: 15px; line-height: 1.6; }
@@ -37,7 +41,10 @@
   <label>Số phòng:</label>
   <input type="text" id="room" placeholder="Nhập số phòng (VD: 201)" autofocus />
 
-  <button class="btn-scan" onclick="startScan()">📷 Mở Camera Quét QR</button>
+  <button class="btn-scan" id="btnScan" onclick="startScan()">📷 Mở Camera Quét QR</button>
+  
+  <label for="qr-input-file" class="btn-upload-label" id="btnUpload">📂 Tải Ảnh Có Sẵn</label>
+  <input type="file" id="qr-input-file" accept="image/*" style="display: none;" onchange="handleFileUpload(event)">
   
   <div class="action-buttons" id="actionButtons">
     <button class="btn-stop" onclick="stopScan()">⏹ Dừng</button>
@@ -56,38 +63,61 @@
   let scanned = false;
   let cameras = [];
   let currentCamIdx = 0;
+  let isCameraRunning = false; // Biến kiểm soát trạng thái camera
 
   // Thuật toán: Tìm mắt camera chính xác nhất
   function findMainCameraIndex(devices) {
     if (!devices || devices.length <= 1) return 0;
-
     let bestIdx = 0;
     for (let i = 0; i < devices.length; i++) {
       let lbl = devices[i].label.toLowerCase();
-      
-      // Bỏ qua camera trước
       if (lbl.includes('front') || lbl.includes('trước')) continue;
-      
-      // Bỏ qua góc rộng và chụp xa
       if (lbl.includes('ultra') || lbl.includes('wide') || lbl.includes('rộng') || lbl.includes('tele')) continue;
-
-      // Nếu tên camera có chữ 'back', 'sau' hoặc số '0' -> Lấy luôn
-      if (lbl.includes('back') || lbl.includes('sau') || lbl.includes('0')) {
-        return i;
-      }
-      bestIdx = i; // Lưu lại phương án dự phòng
+      if (lbl.includes('back') || lbl.includes('sau') || lbl.includes('0')) return i;
+      bestIdx = i; 
     }
-    
-    // Fallback cho iPhone: Thường mắt 1x nằm cuối cùng
     return devices.length - 1;
   }
 
+  // --- XỬ LÝ TẢI ẢNH (MỚI) ---
+  function handleFileUpload(event) {
+    const room = document.getElementById('room').value.trim();
+    if (!room) { 
+      alert('Vui lòng nhập số phòng trước!'); 
+      event.target.value = ''; // Reset file
+      return; 
+    }
+    if (event.target.files.length === 0) return;
+
+    const imageFile = event.target.files[0];
+    scanned = false;
+    showStatus('⏳ Đang phân tích hình ảnh...', 'loading');
+
+    if (!scanner) {
+      scanner = new Html5Qrcode("reader");
+    }
+
+    // Đọc mã QR từ file ảnh tĩnh
+    scanner.scanFile(imageFile, true)
+      .then(decodedText => {
+        onScanSuccess(decodedText);
+      })
+      .catch(err => {
+        showStatus('❌ Không tìm thấy mã QR trong ảnh. Vui lòng chụp rõ nét hơn và không bị lóa.', 'error');
+      });
+
+    // Reset lại ô chọn file để có thể chọn lại ảnh cũ nếu cần
+    event.target.value = '';
+  }
+
+  // --- XỬ LÝ LIVE CAMERA ---
   function startScan() {
     const room = document.getElementById('room').value.trim();
     if (!room) { alert('Vui lòng nhập số phòng trước!'); return; }
 
     scanned = false;
-    document.querySelector('.btn-scan').style.display = 'none';
+    document.getElementById('btnScan').style.display = 'none';
+    document.getElementById('btnUpload').style.display = 'none';
     document.getElementById('actionButtons').style.display = 'flex';
     showStatus('⏳ Đang phân tích các ống kính...', 'loading');
 
@@ -95,7 +125,6 @@
       scanner = new Html5Qrcode("reader");
     }
 
-    // Quét tìm tất cả các mắt camera
     Html5Qrcode.getCameras().then(devices => {
       if (devices && devices.length > 0) {
         cameras = devices;
@@ -116,6 +145,7 @@
       onScanSuccess,
       () => {}
     ).then(() => {
+      isCameraRunning = true;
       showStatus('📷 Đưa QR vào khung hình... <br><small><i>(Vẫn bị mờ? Bấm "Đổi Ống Kính")</i></small>', 'loading');
     }).catch(err => {
       showStatus('❌ Lỗi mở ống kính: ' + err, 'error');
@@ -126,33 +156,37 @@
     if (cameras.length > 1) {
       currentCamIdx = (currentCamIdx + 1) % cameras.length;
       showStatus('⏳ Đang chuyển ống kính...', 'loading');
-      scanner.stop().then(() => {
-        startWithCamera(cameras[currentCamIdx].id);
-      });
+      if (isCameraRunning) {
+        scanner.stop().then(() => {
+          startWithCamera(cameras[currentCamIdx].id);
+        });
+      }
     } else {
       alert('Điện thoại của bạn chỉ có 1 ống kính hỗ trợ quét!');
     }
   }
 
   function stopScan() {
-    if (scanner) {
+    if (scanner && isCameraRunning) {
       scanner.stop().then(() => {
         scanner.clear();
-        scanner = null;
+        isCameraRunning = false;
       });
     }
-    document.querySelector('.btn-scan').style.display = 'block';
+    document.getElementById('btnScan').style.display = 'block';
+    document.getElementById('btnUpload').style.display = 'block';
     document.getElementById('actionButtons').style.display = 'none';
   }
 
+  // --- XỬ LÝ KẾT QUẢ CHUNG ---
   function onScanSuccess(text) {
     if (scanned) return;
     scanned = true;
-    stopScan();
+    stopScan(); // Tự động dừng camera/tắt các nút đang chạy
 
     const parts = text.split('|');
     if (parts.length < 7) {
-      showStatus('❌ QR không hợp lệ. Vui lòng quét lại CCCD.', 'error');
+      showStatus('❌ QR không hợp lệ. Vui lòng thử lại với ảnh CCCD chuẩn.', 'error');
       return;
     }
 
@@ -177,7 +211,7 @@
         showStatus(`
           ✅ <b>Đã lưu thành công!</b><br>
           👤 ${data.name} — Phòng ${room}<br>
-          <small>Tiếp tục nhập số phòng để quét khách tiếp theo</small>
+          <small>Tiếp tục nhập số phòng để xử lý khách tiếp theo</small>
         `, 'success');
         document.getElementById('room').value = '';
       } else {
