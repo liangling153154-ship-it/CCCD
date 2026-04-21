@@ -187,6 +187,17 @@ function scoreCam(label) {
 }
 
 async function getCameras() {
+  // iOS chỉ trả label đầy đủ SAU KHI đã cấp quyền camera.
+  // Nếu chưa có stream nào, mở tạm 1 stream để "unlock" enumerateDevices.
+  const hasPermission = (await navigator.mediaDevices.enumerateDevices())
+    .some(d => d.kind === 'videoinput' && d.label);
+
+  if (!hasPermission) {
+    // Mở nhanh rồi đóng ngay — chỉ để xin quyền & unlock labels
+    const tmp = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    tmp.getTracks().forEach(t => t.stop());
+  }
+
   const devices = await navigator.mediaDevices.enumerateDevices();
   cameras = devices.filter(d => d.kind === 'videoinput');
   let best = 0;
@@ -194,21 +205,20 @@ async function getCameras() {
     if (scoreCam(cameras[i].label) > scoreCam(cameras[best].label)) best = i;
   }
   camIdx = best;
+  console.log('[CAM] Found', cameras.length, 'cameras. Best idx:', camIdx, cameras.map(c=>c.label));
 }
 
 async function openCamera(deviceId) {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
 
-  // iOS Safari: avoid advanced constraints that cause errors
-  const advanced = IS_IOS ? [] : [{ focusMode: 'continuous' }];
-
+  // Không đưa advanced[] vào getUserMedia — iOS Safari hay reject.
+  // Apply focus/zoom SAU KHI có track, dùng try/catch riêng từng feature.
   const constraints = {
     video: {
       deviceId: deviceId ? { exact: deviceId } : undefined,
       facingMode: deviceId ? undefined : 'environment',
       width:  { ideal: 1920 },
       height: { ideal: 1080 },
-      ...(advanced.length ? { advanced } : {})
     }
   };
 
@@ -216,24 +226,33 @@ async function openCamera(deviceId) {
   video.srcObject = stream;
   await video.play();
 
-  // Hardware zoom — skip on iOS (crashes some models)
-  if (!IS_IOS) {
-    const track = stream.getVideoTracks()[0];
-    const caps  = track.getCapabilities ? track.getCapabilities() : {};
+  const track = stream.getVideoTracks()[0];
+
+  // ── Continuous autofocus ──
+  try {
+    await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+  } catch(_) {}
+
+  // ── Hardware zoom — iOS 15+ và Android đều qua applyConstraints ──
+  try {
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
     if (caps.zoom) {
-      const z = Math.min(3, caps.zoom.max ?? 3);
-      if (z > (caps.zoom.min ?? 1)) {
-        await track.applyConstraints({ advanced: [{ zoom: z }] }).catch(()=>{});
+      const zMin    = caps.zoom.min ?? 1;
+      const zMax    = caps.zoom.max ?? 1;
+      const zTarget = IS_IOS ? Math.min(2, zMax) : Math.min(3, zMax); // iPhone 2×, Android 3×
+      if (zTarget > zMin) {
+        await track.applyConstraints({ advanced: [{ zoom: zTarget }] });
+        console.log('[CAM] Zoom applied:', zTarget);
       }
     }
-  }
+  } catch(_) {}
 
   wrap.style.display = 'block';
   setTimeout(drawOverlay, 400);
 
-  // iOS: tap-to-focus workaround (triggers autofocus on tap)
   if (IS_IOS) {
-    wrap.addEventListener('click', iosFocusTap, { once: false });
+    wrap.removeEventListener('click', iosFocusTap);
+    wrap.addEventListener('click', iosFocusTap);
   }
 }
 
