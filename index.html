@@ -4,6 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Check-in CCCD - Sen's Homestay</title>
+  <!--
+    DECODER PRIORITY:
+    1. BarcodeDetector API  — Chrome Android / Samsung Internet (GPU/ML Kit, fastest)
+    2. Nimiq QR Scanner     — ZXing C++ → WASM (strong fallback, works on iOS/Firefox)
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/@nimiq/qr-scanner@1.4.8/qr-scanner.umd.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, sans-serif; max-width: 480px; margin: auto; padding: 20px; background: #f4f7f9; }
@@ -13,8 +19,8 @@
     input[type="text"] { width: 100%; padding: 14px; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 16px; }
     input[type="text"]:focus { border-color: #1a73e8; outline: none; }
     button { width: 100%; padding: 14px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; margin-bottom: 8px; }
-    .btn-scan   { background: #1a73e8; color: white; }
-    .btn-scan:active { background: #1557b0; }
+    .btn-scan  { background: #1a73e8; color: white; }
+    .btn-scan:active  { background: #1557b0; }
     .btn-upload-label { background: #34a853; color: white; display: block; text-align: center; width: 100%; padding: 14px; font-size: 16px; border-radius: 8px; cursor: pointer; font-weight: bold; margin-bottom: 8px; }
     .btn-upload-label:active { background: #2d8e47; }
     .action-buttons { display: none; gap: 10px; margin-bottom: 8px; }
@@ -25,38 +31,28 @@
     #vf-wrap {
       position: relative; margin: 12px 0;
       border-radius: 8px; overflow: hidden;
-      background: #000;
-      display: none;
+      background: #000; display: none;
     }
-    #vf-video {
-      display: block; width: 100%;
-      /* intentional: height set by JS after stream starts */
-    }
-    /* Canvas used for BarcodeDetector (hidden) */
-    #vf-canvas { display: none; }
+    #vf-video { display: block; width: 100%; }
 
-    /* 4 dim pieces */
+    /* 4 dim panes */
     .ov { position: absolute; background: rgba(0,0,0,0.5); pointer-events: none; }
 
     /* Corner brackets */
-    .corner {
-      position: absolute; width: 24px; height: 24px;
-      border-color: #fff; border-style: solid; pointer-events: none;
-    }
-    .corner-tl { top:0; left:0;  border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
-    .corner-tr { top:0; right:0; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
+    .corner { position: absolute; width: 24px; height: 24px; border-color: #fff; border-style: solid; pointer-events: none; }
+    .corner-tl { top:0; left:0;   border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
+    .corner-tr { top:0; right:0;  border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
     .corner-bl { bottom:0; left:0;  border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
     .corner-br { bottom:0; right:0; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
 
     /* Laser */
-    #laser {
-      position: absolute; left: 0; height: 2px;
+    .laser {
+      position: absolute; height: 2px; pointer-events: none;
       background: linear-gradient(to right, transparent, #1a73e8 25%, #1a73e8 75%, transparent);
       box-shadow: 0 0 6px 2px rgba(26,115,232,0.6);
-      pointer-events: none;
     }
-    /* Tip */
-    #tip {
+    /* Tip bar */
+    .tip-bar {
       position: absolute; bottom: 0; left: 0; right: 0;
       background: rgba(0,0,0,0.6); color: #ffffffcc;
       font-size: 12px; text-align: center; padding: 6px;
@@ -92,11 +88,8 @@
     <button class="btn-switch" onclick="switchCam()">🔄 Đổi Ống Kính</button>
   </div>
 
-  <!-- Custom viewfinder (no 3rd-party library DOM) -->
   <div id="vf-wrap">
     <video id="vf-video" autoplay playsinline muted></video>
-    <canvas id="vf-canvas"></canvas>
-    <!-- overlay elements injected by JS -->
   </div>
 
   <div id="status"></div>
@@ -105,54 +98,47 @@
 <script>
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzW5SfriqLXKG9vGLHW-0EyCzVD_B3OXimJT_4-6b-C-QN-lbqJOdl0qiCkQ4ZPVt8_FA/exec';
 
-/* ═══════════════════════════════════════════════════════
-   STATE
-═══════════════════════════════════════════════════════ */
-let stream       = null;   // MediaStream
-let cameras      = [];
-let camIdx       = 0;
-let scanLoop     = null;   // requestAnimationFrame handle
-let scanned      = false;
-let decoder      = null;   // BarcodeDetector instance (if supported)
-let fallbackLib  = null;   // Html5Qrcode instance (fallback)
-let laserTimer   = null;
-let laserDir     = 1;
-let laserPos     = 0;
+/* ═══════════════════════════════════════════════════
+   ENGINE DETECTION
+   Tier 1 — BarcodeDetector (Chrome Android / Samsung)
+     Calls the same ML Kit used by the Samsung Camera app.
+     detect() runs off the main thread on GPU/ML hardware.
+   Tier 2 — Nimiq QR Scanner
+     ZXing C++ compiled to WASM via Emscripten.
+     ~10× faster than the ZXing JS port used by html5-qrcode.
+     Works on iOS Safari, Firefox, older Chrome.
+     Uses its own <video> internally but we overlay our
+     viewfinder on top.
+═══════════════════════════════════════════════════ */
+const HAS_BD = ('BarcodeDetector' in window);
 
-const video  = document.getElementById('vf-video');
-const canvas = document.getElementById('vf-canvas');
-const wrap   = document.getElementById('vf-wrap');
-const ctx    = canvas.getContext('2d', { willReadFrequently: true });
+let bdDecoder   = null;   // BarcodeDetector instance
+let nimiqScanner = null;  // QrScanner (Nimiq) instance
 
-/* ═══════════════════════════════════════════════════════
-   DETECT ENGINE
-   Priority:
-   1. Native BarcodeDetector (Chrome Android / Samsung)  ← fastest
-   2. html5-qrcode (cross-platform fallback)
-═══════════════════════════════════════════════════════ */
-const HAS_BARCODE_DETECTOR = ('BarcodeDetector' in window);
+let stream      = null;
+let cameras     = [];
+let camIdx      = 0;
+let rafHandle   = null;   // requestAnimationFrame for BD loop
+let scanned     = false;
+let laserTimer  = null;
+let laserDir    = 1;
+let laserPos    = 0;
 
-function initDecoder() {
-  if (HAS_BARCODE_DETECTOR) {
-    decoder = new BarcodeDetector({ formats: ['qr_code'] });
-    showStatus('🚀 Dùng BarcodeDetector API (tốc độ cao nhất).', 'loading');
-  } else {
-    showStatus('⚠️ Trình duyệt không hỗ trợ BarcodeDetector, dùng fallback.', 'loading');
-    loadFallback();
-  }
+const video = document.getElementById('vf-video');
+const wrap  = document.getElementById('vf-wrap');
+
+/* ── init ── */
+if (HAS_BD) {
+  bdDecoder = new BarcodeDetector({ formats: ['qr_code'] });
 }
+// Nimiq is already loaded synchronously via <script> tag above.
+// Set the WASM worker path so it can find qr-scanner-worker.min.js
+// (jsdelivr serves both files from the same package path)
+QrScanner.WORKER_PATH = 'https://cdn.jsdelivr.net/npm/@nimiq/qr-scanner@1.4.8/qr-scanner-worker.min.js';
 
-function loadFallback() {
-  if (window.Html5Qrcode) return;
-  const s = document.createElement('script');
-  s.src = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
-  s.onload = () => console.log('html5-qrcode loaded');
-  document.head.appendChild(s);
-}
-
-/* ═══════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════
    CAMERA HELPERS
-═══════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════ */
 function scoreCam(label) {
   const l = label.toLowerCase();
   if (l.includes('front') || l.includes('trước')) return -1;
@@ -162,10 +148,9 @@ function scoreCam(label) {
   return 1;
 }
 
-async function getCameras() {
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  cameras = devices.filter(d => d.kind === 'videoinput');
-  // pick best rear cam
+async function loadCameras() {
+  const devs = await navigator.mediaDevices.enumerateDevices();
+  cameras = devs.filter(d => d.kind === 'videoinput');
   let best = 0;
   for (let i = 1; i < cameras.length; i++) {
     if (scoreCam(cameras[i].label) > scoreCam(cameras[best].label)) best = i;
@@ -173,10 +158,9 @@ async function getCameras() {
   camIdx = best;
 }
 
-async function openCamera(deviceId) {
+async function openStream(deviceId) {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-
-  const constraints = {
+  stream = await navigator.mediaDevices.getUserMedia({
     video: {
       deviceId: deviceId ? { exact: deviceId } : undefined,
       facingMode: deviceId ? undefined : 'environment',
@@ -184,120 +168,135 @@ async function openCamera(deviceId) {
       height: { ideal: 1080 },
       advanced: [{ focusMode: 'continuous' }]
     }
-  };
-
-  stream = await navigator.mediaDevices.getUserMedia(constraints);
+  });
   video.srcObject = stream;
   await video.play();
 
-  // Apply hardware zoom (3×) if supported
+  // Hardware zoom 3× (Android Chrome)
   const track = stream.getVideoTracks()[0];
-  const caps  = track.getCapabilities ? track.getCapabilities() : {};
+  const caps  = track.getCapabilities?.() ?? {};
   if (caps.zoom) {
     const z = Math.min(3, caps.zoom.max ?? 3);
-    if (z > (caps.zoom.min ?? 1)) {
+    if (z > (caps.zoom.min ?? 1))
       await track.applyConstraints({ advanced: [{ zoom: z }] });
-    }
   }
-
-  // Size the viewfinder container to match rendered video
-  wrap.style.display = 'block';
-  // Let the video establish dimensions then draw overlay
-  setTimeout(drawOverlay, 400);
 }
 
-/* ═══════════════════════════════════════════════════════
-   SCAN LOOP  —  BarcodeDetector path
-   We decode directly from the live <video> element.
-   BarcodeDetector.detect(video) uses the GPU/ML accelerator;
-   it does NOT need us to draw to canvas first.
-═══════════════════════════════════════════════════════ */
-function startNativeLoop() {
-  if (scanLoop) cancelAnimationFrame(scanLoop);
-
+/* ═══════════════════════════════════════════════════
+   TIER-1: BarcodeDetector scan loop
+   detect() accepts a live HTMLVideoElement directly —
+   the browser samples the frame internally at GPU speed.
+═══════════════════════════════════════════════════ */
+function startBDLoop() {
+  if (rafHandle) cancelAnimationFrame(rafHandle);
   async function tick() {
     if (!stream || scanned) return;
     if (video.readyState >= 2) {
       try {
-        const codes = await decoder.detect(video);
-        if (codes.length > 0) {
-          onDecoded(codes[0].rawValue);
-          return;   // stop loop
-        }
-      } catch(_) {}
+        const codes = await bdDecoder.detect(video);
+        if (codes.length) { onDecoded(codes[0].rawValue); return; }
+      } catch (_) {}
     }
-    scanLoop = requestAnimationFrame(tick);
+    rafHandle = requestAnimationFrame(tick);
   }
-  scanLoop = requestAnimationFrame(tick);
+  rafHandle = requestAnimationFrame(tick);
 }
 
-/* ═══════════════════════════════════════════════════════
-   SCAN LOOP  —  html5-qrcode fallback
-   Mount a hidden html5-qrcode instance on a throwaway div.
-═══════════════════════════════════════════════════════ */
-function startFallbackLoop(deviceId) {
-  // Create a hidden container for html5-qrcode
-  let fb = document.getElementById('_fb');
-  if (!fb) { fb = document.createElement('div'); fb.id = '_fb'; fb.style.display='none'; document.body.appendChild(fb); }
+/* ═══════════════════════════════════════════════════
+   TIER-2: Nimiq QR Scanner (ZXing WASM)
+   QrScanner takes a <video> element and a callback.
+   It uses a WASM worker to decode each frame, which
+   is significantly stronger than the JS ZXing port.
 
-  if (fallbackLib) { try { fallbackLib.stop().catch(()=>{}); } catch(_){} }
+   Key options:
+   - preferredCamera: passed as deviceId
+   - maxScansPerSecond: 15 (matches camera fps)
+   - highlightScanRegion / highlightCodeOutline: false
+     because we draw our own overlay
+   - returnDetailedScanResult: true (gives us .data)
+═══════════════════════════════════════════════════ */
+async function startNimiq(deviceId) {
+  // Destroy any previous instance
+  if (nimiqScanner) { nimiqScanner.destroy(); nimiqScanner = null; }
 
-  fallbackLib = new Html5Qrcode('_fb', {
-    formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
-    useBarCodeDetectorIfSupported: true,
-    verbose: false
-  });
+  // Nimiq manages its own camera stream internally.
+  // We DON'T call openStream() here — Nimiq does it.
+  nimiqScanner = new QrScanner(
+    video,
+    result => onDecoded(result.data ?? result),
+    {
+      preferredCamera:         deviceId ?? 'environment',
+      maxScansPerSecond:       15,
+      highlightScanRegion:     false,
+      highlightCodeOutline:    false,
+      returnDetailedScanResult: true,
+      // Ask for full-HD stream via the constraints Nimiq forwards
+      videoConstraints: {
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 },
+        advanced: [{ focusMode: 'continuous' }]
+      }
+    }
+  );
 
-  const cfg = deviceId ? deviceId : { facingMode: 'environment' };
-  fallbackLib.start(cfg, {
-    fps: 15,
-    qrbox: { width: 300, height: 300 },
-    videoConstraints: { width:{ideal:1920}, height:{ideal:1080}, advanced:[{focusMode:'continuous'}] }
-  }, text => onDecoded(text), ()=>{});
+  await nimiqScanner.start();
+
+  // After Nimiq opens the stream, apply hw zoom if available
+  const nimiqStream = video.srcObject;
+  if (nimiqStream) {
+    const track = nimiqStream.getVideoTracks()[0];
+    const caps  = track?.getCapabilities?.() ?? {};
+    if (caps.zoom) {
+      const z = Math.min(3, caps.zoom.max ?? 3);
+      if (z > (caps.zoom.min ?? 1))
+        await track.applyConstraints({ advanced: [{ zoom: z }] });
+    }
+    // Keep a reference so stopScan can tear it down
+    stream = nimiqStream;
+  }
 }
 
-/* ═══════════════════════════════════════════════════════
-   OVERLAY  —  custom viewfinder on top of <video>
-═══════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════
+   VIEWFINDER OVERLAY
+   Drawn over the <video> element. Computed from
+   rendered pixel dimensions (offsetWidth/Height) so
+   it stays accurate regardless of zoom or aspect ratio.
+═══════════════════════════════════════════════════ */
 function drawOverlay() {
-  // Remove old overlay
-  wrap.querySelectorAll('.ov,.corner,#laser,#tip,.box-frame').forEach(e => e.remove());
+  wrap.querySelectorAll('.ov,.box-frame,.laser,.tip-bar').forEach(e => e.remove());
   if (laserTimer) { clearInterval(laserTimer); laserTimer = null; }
 
-  const W = video.offsetWidth  || wrap.offsetWidth;
-  const H = video.offsetHeight || wrap.offsetHeight || W;
+  const W = video.offsetWidth  || wrap.offsetWidth  || 320;
+  const H = video.offsetHeight || wrap.offsetHeight || 320;
   if (!W || !H) { setTimeout(drawOverlay, 200); return; }
 
   const side = Math.floor(Math.min(W, H) * 0.85);
   const bL   = Math.floor((W - side) / 2);
   const bT   = Math.floor((H - side) / 2);
 
-  const mk = (tag, styles, parent) => {
-    const el = document.createElement(tag || 'div');
-    Object.assign(el.style, styles);
-    (parent || wrap).appendChild(el);
-    return el;
+  const ap = { position: 'absolute', pointerEvents: 'none' };
+
+  const mk = (cls, styles) => {
+    const d = document.createElement('div');
+    d.className = cls;
+    Object.assign(d.style, ap, styles);
+    wrap.appendChild(d);
+    return d;
   };
 
-  // 4 dim panes
-  const base = { position:'absolute', pointerEvents:'none' };
-  mk('div', {...base, top:'0',     left:'0', right:'0',   height: bT+'px',             background:'rgba(0,0,0,0.5)'   }).className='ov';
-  mk('div', {...base, bottom:'0',  left:'0', right:'0',   height: (H-bT-side)+'px',    background:'rgba(0,0,0,0.5)'   }).className='ov';
-  mk('div', {...base, top:bT+'px', left:'0', width:bL+'px', height:side+'px',           background:'rgba(0,0,0,0.5)'   }).className='ov';
-  mk('div', {...base, top:bT+'px', right:'0', width:(W-bL-side)+'px', height:side+'px', background:'rgba(0,0,0,0.5)'  }).className='ov';
+  mk('ov', { top:'0', left:'0', right:'0', height: bT+'px' });
+  mk('ov', { bottom:'0', left:'0', right:'0', height: (H-bT-side)+'px' });
+  mk('ov', { top: bT+'px', left:'0', width: bL+'px', height: side+'px' });
+  mk('ov', { top: bT+'px', right:'0', width: (W-bL-side)+'px', height: side+'px' });
 
-  // Corner bracket container
-  const frame = mk('div', { ...base, top:bT+'px', left:bL+'px', width:side+'px', height:side+'px' });
-  frame.className = 'box-frame';
+  const frame = mk('box-frame', { top: bT+'px', left: bL+'px', width: side+'px', height: side+'px' });
   ['corner-tl','corner-tr','corner-bl','corner-br'].forEach(c => {
     const d = document.createElement('div');
     d.className = 'corner ' + c;
     frame.appendChild(d);
   });
 
-  // Laser line
-  const laser = mk('div', { ...base, id:'laser', left:bL+'px', width:side+'px', top:bT+'px' });
-  laser.id = 'laser';
+  const laser = mk('laser', { left: bL+'px', width: side+'px', top: bT+'px' });
   laserDir = 1; laserPos = 0;
   laserTimer = setInterval(() => {
     if (!document.contains(laser)) { clearInterval(laserTimer); return; }
@@ -307,73 +306,83 @@ function drawOverlay() {
     laser.style.top = (bT + laserPos) + 'px';
   }, 16);
 
-  // Tip
-  const tip = mk('div', { ...base, bottom:'0', left:'0', right:'0', background:'rgba(0,0,0,0.6)', color:'#ffffffcc', fontSize:'12px', textAlign:'center', padding:'6px' });
-  tip.id = 'tip';
-  tip.textContent = '💡 Đưa QR vào khung · cách 15-20cm · giữ thẳng tay';
+  mk('tip-bar', { bottom:'0', left:'0', right:'0' })
+    .textContent = '💡 Đưa QR vào khung · cách 15-20cm · giữ thẳng tay';
 }
 
-/* ═══════════════════════════════════════════════════════
-   PUBLIC ACTIONS
-═══════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════
+   PUBLIC: start / stop / switch
+═══════════════════════════════════════════════════ */
 async function startScan() {
-  const room = document.getElementById('room').value.trim();
-  if (!room) { alert('Vui lòng nhập số phòng trước!'); return; }
-
+  if (!document.getElementById('room').value.trim()) {
+    alert('Vui lòng nhập số phòng trước!'); return;
+  }
   scanned = false;
-  document.getElementById('btnScan').style.display   = 'none';
-  document.getElementById('btnUpload').style.display = 'none';
+  document.getElementById('btnScan').style.display    = 'none';
+  document.getElementById('btnUpload').style.display  = 'none';
   document.getElementById('actionBtns').style.display = 'flex';
+  wrap.style.display = 'block';
   showStatus('⏳ Đang khởi động camera...', 'loading');
 
   try {
-    await getCameras();
+    await loadCameras();
     const devId = cameras[camIdx]?.deviceId;
 
-    if (HAS_BARCODE_DETECTOR) {
-      await openCamera(devId);
-      startNativeLoop();
-      showStatus('📷 BarcodeDetector — đưa QR vào khung.', 'loading');
+    if (HAS_BD) {
+      // Tier 1: manage stream ourselves, BarcodeDetector decodes
+      await openStream(devId);
+      startBDLoop();
+      showStatus('📷 <b>BarcodeDetector</b> (ML Kit) — đưa QR vào khung.', 'loading');
     } else {
-      // Fallback: open camera via html5-qrcode (manages its own video)
-      wrap.style.display = 'none';  // hide our custom video; library uses its own
-      startFallbackLoop(devId);
-      showStatus('📷 Đưa QR vào khung.', 'loading');
+      // Tier 2: Nimiq (ZXing WASM) manages the stream
+      await startNimiq(devId);
+      showStatus('📷 <b>ZXing WASM</b> (Nimiq) — đưa QR vào khung.', 'loading');
     }
-  } catch(err) {
+    setTimeout(drawOverlay, 500);
+
+  } catch (err) {
     showStatus('❌ Lỗi mở camera: ' + err, 'error');
+    stopScan();
   }
 }
 
 async function switchCam() {
   if (cameras.length < 2) { alert('Chỉ có 1 ống kính!'); return; }
   camIdx = (camIdx + 1) % cameras.length;
-  if (scanLoop) { cancelAnimationFrame(scanLoop); scanLoop = null; }
-  await openCamera(cameras[camIdx].deviceId);
-  if (HAS_BARCODE_DETECTOR) startNativeLoop();
+  if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandle = null; }
+
+  const devId = cameras[camIdx].deviceId;
+  try {
+    if (HAS_BD) {
+      await openStream(devId);
+      startBDLoop();
+    } else {
+      await startNimiq(devId);
+    }
+    setTimeout(drawOverlay, 500);
+  } catch (err) {
+    showStatus('❌ Lỗi đổi camera: ' + err, 'error');
+  }
 }
 
 function stopScan() {
-  // Stop native loop
-  if (scanLoop) { cancelAnimationFrame(scanLoop); scanLoop = null; }
-  // Stop stream tracks
+  if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandle = null; }
+  if (nimiqScanner) { nimiqScanner.destroy(); nimiqScanner = null; }
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   video.srcObject = null;
-  // Stop fallback lib
-  if (fallbackLib) { try { fallbackLib.stop().catch(()=>{}); } catch(_){} fallbackLib = null; }
-  // Clean up overlay
-  wrap.querySelectorAll('.ov,.corner,#laser,#tip,.box-frame').forEach(e => e.remove());
+
+  wrap.querySelectorAll('.ov,.box-frame,.laser,.tip-bar').forEach(e => e.remove());
   if (laserTimer) { clearInterval(laserTimer); laserTimer = null; }
   wrap.style.display = 'none';
 
-  document.getElementById('btnScan').style.display   = 'block';
-  document.getElementById('btnUpload').style.display = 'block';
+  document.getElementById('btnScan').style.display    = 'block';
+  document.getElementById('btnUpload').style.display  = 'block';
   document.getElementById('actionBtns').style.display = 'none';
 }
 
-/* ═══════════════════════════════════════════════════════
-   FILE UPLOAD
-═══════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════
+   FILE UPLOAD  (both engines handle ImageBitmap/File)
+═══════════════════════════════════════════════════ */
 async function handleFile(event) {
   const room = document.getElementById('room').value.trim();
   if (!room) { alert('Vui lòng nhập số phòng trước!'); event.target.value=''; return; }
@@ -382,29 +391,26 @@ async function handleFile(event) {
 
   showStatus(`📂 <b>${file.name}</b> — đang tìm mã QR...`, 'loading');
 
-  if (HAS_BARCODE_DETECTOR) {
-    try {
-      const bmp = await createImageBitmap(file);
-      const codes = await decoder.detect(bmp);
+  try {
+    if (HAS_BD) {
+      const bmp   = await createImageBitmap(file);
+      const codes = await bdDecoder.detect(bmp);
       if (codes.length) { onDecoded(codes[0].rawValue); }
       else showStatus('❌ Không tìm thấy QR. Thử crop ảnh gần hơn.', 'error');
-    } catch(e) {
-      showStatus('❌ Lỗi đọc ảnh: ' + e, 'error');
+    } else {
+      // Nimiq static scan: QrScanner.scanImage accepts a File directly
+      const result = await QrScanner.scanImage(file, { returnDetailedScanResult: true });
+      onDecoded(result.data ?? result);
     }
-  } else {
-    // fallback via html5-qrcode file scan
-    if (!window.Html5Qrcode) { showStatus('⏳ Đang tải thư viện, thử lại sau 2s...','loading'); return; }
-    const tmp = new Html5Qrcode('_tmp_' + Date.now());
-    tmp.scanFile(file, false)
-      .then(t => onDecoded(t))
-      .catch(() => showStatus('❌ Không tìm thấy QR.', 'error'));
+  } catch (e) {
+    showStatus('❌ Không tìm thấy QR. Thử crop sát hơn.', 'error');
   }
   event.target.value = '';
 }
 
-/* ═══════════════════════════════════════════════════════
-   DECODE RESULT → GOOGLE SHEETS
-═══════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════
+   DECODED RESULT → GOOGLE SHEETS
+═══════════════════════════════════════════════════ */
 function onDecoded(text) {
   if (scanned) return;
   scanned = true;
@@ -412,7 +418,7 @@ function onDecoded(text) {
 
   const parts = text.split('|');
   if (parts.length < 7) {
-    showStatus('❌ <b>QR không hợp lệ</b> — không phải CCCD chuẩn VN (cần ≥ 7 trường).', 'error');
+    showStatus('❌ <b>QR không hợp lệ</b> — không phải CCCD chuẩn VN.', 'error');
     return;
   }
 
@@ -427,7 +433,7 @@ function onDecoded(text) {
   .then(r => r.json())
   .then(d => {
     if (d.success) {
-      showStatus(`🎉 <b>LƯU THÀNH CÔNG!</b><br>👤 <b>${d.name}</b><br>🛏️ Phòng <b>${room}</b><hr style="border:0;border-top:1px solid #c8e6c9;margin:8px 0"><small>✨ Sẵn sàng khách tiếp theo.</small>`, 'success');
+      showStatus(`🎉 <b>LƯU THÀNH CÔNG!</b><br>👤 <b>${d.name}</b><br>🛏️ Phòng <b>${d.room || room}</b><hr style="border:0;border-top:1px solid #c8e6c9;margin:8px 0"><small>✨ Sẵn sàng khách tiếp theo.</small>`, 'success');
       document.getElementById('room').value = '';
     } else {
       showStatus('❌ Sheets báo lỗi: ' + d.error, 'error');
@@ -439,13 +445,9 @@ function onDecoded(text) {
 function showStatus(msg, type) {
   const el = document.getElementById('status');
   el.style.display = 'block';
-  el.className = type;
-  el.innerHTML = msg;
+  el.className     = type;
+  el.innerHTML     = msg;
 }
-
-/* ── Boot ── */
-initDecoder();
-loadFallback();  // preload in background regardless
 </script>
 </body>
 </html>
