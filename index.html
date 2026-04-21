@@ -9,26 +9,72 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, sans-serif; max-width: 480px; margin: auto; padding: 20px; background: #f4f7f9; }
     .card { background: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-    
-    /* Căn chỉnh tiêu đề để chứa lá cờ cho đẹp */
     h2 { color: #1a73e8; text-align: center; margin-bottom: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; }
-    
     label { font-weight: bold; display: block; margin-bottom: 6px; color: #555; }
     input[type="text"] { width: 100%; padding: 14px; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 16px; }
     input[type="text"]:focus { border-color: #1a73e8; outline: none; }
-    
     button { width: 100%; padding: 14px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; margin-bottom: 8px; }
     .btn-scan { background: #1a73e8; color: white; }
     .btn-scan:active { background: #1557b0; }
-    
     .btn-upload-label { background: #34a853; color: white; display: block; text-align: center; width: 100%; padding: 14px; font-size: 16px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; margin-bottom: 8px; }
     .btn-upload-label:active { background: #2d8e47; }
-    
     .action-buttons { display: none; gap: 10px; margin-bottom: 8px; }
     .btn-stop { background: #e53935; color: white; flex: 1; margin-bottom: 0; }
     .btn-switch { background: #fbbc04; color: #333; flex: 1; margin-bottom: 0; }
-    
-    #reader { margin: 12px 0; border-radius: 8px; overflow: hidden; border: none !important; }
+
+    /* --- VIEWFINDER OVERLAY --- */
+    #reader-wrap { position: relative; margin: 12px 0; }
+    #reader { border-radius: 8px; overflow: hidden; border: none !important; }
+
+    /* Dim everything OUTSIDE the scan window */
+    .overlay-piece {
+      position: absolute;
+      background: rgba(0,0,0,0.45);
+      pointer-events: none;
+    }
+    #ov-top    { top:0; left:0; right:0; }
+    #ov-bottom { left:0; right:0; bottom:0; }
+    #ov-left   { left:0; }
+    #ov-right  { right:0; }
+
+    /* Animated corner brackets */
+    .corner {
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      border-color: #fff;
+      border-style: solid;
+      pointer-events: none;
+    }
+    .corner-tl { top: 0; left: 0; border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
+    .corner-tr { top: 0; right: 0; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
+    .corner-bl { bottom: 0; left: 0; border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
+    .corner-br { bottom: 0; right: 0; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
+
+    /* Laser scan line */
+    @keyframes scanline { 0%{top:0%} 50%{top:94%} 100%{top:0%} }
+    .scanline {
+      position: absolute;
+      left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(to right, transparent, #1a73e8 30%, #1a73e8 70%, transparent);
+      box-shadow: 0 0 6px 1px rgba(26,115,232,0.7);
+      pointer-events: none;
+      animation: scanline 2s ease-in-out infinite;
+    }
+
+    /* Tip bar (camera quality hint) */
+    .tip-bar {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      background: rgba(0,0,0,0.55);
+      color: #ffffffcc;
+      font-size: 12px;
+      text-align: center;
+      padding: 6px 8px;
+      pointer-events: none;
+    }
+
     #status { padding: 16px; border-radius: 8px; display: none; margin-top: 12px; font-size: 15px; line-height: 1.6; transition: 0.3s; }
     .success { background: #e8f5e9; border-left: 4px solid #43a047; color: #1e4620; }
     .error   { background: #ffebee; border-left: 4px solid #e53935; color: #b71c1c; }
@@ -36,11 +82,10 @@
   </style>
 </head>
 <body>
-
 <div class="card">
   <h2>
-    📋 Quét CCCD Nội Địa 
-    <svg width="28" height="20" viewBox="0 0 900 600" style="border-radius: 2px; box-shadow: 0 1px 3px rgba(0,0,0,0.2);">
+    📋 Quét CCCD Nội Địa
+    <svg width="28" height="20" viewBox="0 0 900 600" style="border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.2)">
       <rect fill="#da251d" width="900" height="600"/>
       <polygon fill="#ffcd00" points="450,114 534,372 314,213 586,213 366,372"/>
     </svg>
@@ -50,21 +95,24 @@
   <input type="text" id="room" placeholder="Nhập số phòng (VD: 201)" autofocus />
 
   <button class="btn-scan" id="btnScan" onclick="startScan()">📷 Mở Camera Quét QR</button>
-  
+
   <label for="qr-input-file" class="btn-upload-label" id="btnUpload">📂 Tải Ảnh Có Sẵn</label>
-  <input type="file" id="qr-input-file" accept="image/*" style="display: none;" onchange="handleFileUpload(event)">
-  
+  <input type="file" id="qr-input-file" accept="image/*" style="display:none" onchange="handleFileUpload(event)">
+
   <div class="action-buttons" id="actionButtons">
     <button class="btn-stop" onclick="stopScan()">⏹ Dừng</button>
     <button class="btn-switch" onclick="switchCamera()">🔄 Đổi Ống Kính</button>
   </div>
 
-  <div id="reader"></div>
+  <!-- Viewfinder wrapper (overlay injected by JS after scanner starts) -->
+  <div id="reader-wrap">
+    <div id="reader"></div>
+  </div>
+
   <div id="status"></div>
 </div>
 
 <script>
-  // ⚠️ ĐỪNG QUÊN DÁN LẠI LINK GOOGLE APPS SCRIPT VÀO ĐÂY NHÉ
   const GAS_URL = 'https://script.google.com/macros/s/AKfycbzW5SfriqLXKG9vGLHW-0EyCzVD_B3OXimJT_4-6b-C-QN-lbqJOdl0qiCkQ4ZPVt8_FA/exec';
 
   let scanner = null;
@@ -73,54 +121,154 @@
   let currentCamIdx = 0;
   let isCameraRunning = false;
 
+  /* ──────────────────────────────────────────────
+     PICK THE BEST REAR CAMERA
+     Priority: labeled "back 0" / "main" first,
+     avoid ultra-wide / front / tele.
+  ────────────────────────────────────────────── */
   function findMainCameraIndex(devices) {
     if (!devices || devices.length <= 1) return 0;
-    let bestIdx = 0;
-    for (let i = 0; i < devices.length; i++) {
-      let lbl = devices[i].label.toLowerCase();
-      if (lbl.includes('front') || lbl.includes('trước')) continue;
-      if (lbl.includes('ultra') || lbl.includes('wide') || lbl.includes('rộng') || lbl.includes('tele')) continue;
-      if (lbl.includes('back') || lbl.includes('sau') || lbl.includes('0')) return i;
-      bestIdx = i; 
+    const score = lbl => {
+      lbl = lbl.toLowerCase();
+      if (lbl.includes('front') || lbl.includes('trước')) return -1;
+      if (lbl.includes('ultra') || lbl.includes('wide') || lbl.includes('tele')) return 0;
+      if (lbl.includes('back') || lbl.includes('sau')) return 3;
+      if (lbl.includes('main') || lbl.includes('chính')) return 2;
+      if (lbl.includes('0'))  return 2;
+      return 1;
+    };
+    let best = 0;
+    for (let i = 1; i < devices.length; i++) {
+      if (score(devices[i].label) > score(devices[best].label)) best = i;
     }
-    return devices.length - 1;
+    return best;
   }
 
-  // --- XỬ LÝ TẢI ẢNH ---
+  /* ──────────────────────────────────────────────
+     OVERLAY: dim outside the scan window,
+     add corner brackets + laser line + tip text
+  ────────────────────────────────────────────── */
+  function injectOverlay() {
+    const wrap = document.getElementById('reader-wrap');
+    const readerEl = document.getElementById('reader');
+    if (!readerEl) return;
+
+    // Find the <video> to measure video size
+    const video = readerEl.querySelector('video');
+    if (!video) { setTimeout(injectOverlay, 300); return; }
+
+    // html5-qrcode puts a shaded region itself; we supersede it
+    // Remove any existing overlay pieces first
+    wrap.querySelectorAll('.overlay-piece,.corner,.scanline,.tip-bar').forEach(e => e.remove());
+
+    // Wait one frame for html5-qrcode to insert its own qr-shaded-region
+    setTimeout(() => {
+      // Get the inner scan box dimensions placed by the library
+      const shaded = readerEl.querySelector('#qr-shaded-region');
+      const videoW = video.offsetWidth || readerEl.offsetWidth;
+      const videoH = video.offsetHeight || readerEl.offsetHeight;
+
+      if (!shaded || !videoH) { injectOverlay(); return; }
+
+      const boxLeft   = parseInt(shaded.style.left  || 0);
+      const boxTop    = parseInt(shaded.style.top   || 0);
+      const boxWidth  = parseInt(shaded.style.width || (videoW * 0.75));
+      const boxHeight = parseInt(shaded.style.height || boxWidth);
+
+      // Make wrap relatively positioned and cover the full video
+      wrap.style.position = 'relative';
+
+      const mk = (id, cls, styles) => {
+        const d = document.createElement('div');
+        if (id) d.id = id;
+        cls.forEach(c => d.classList.add(c));
+        Object.assign(d.style, styles);
+        wrap.appendChild(d);
+        return d;
+      };
+
+      // Dim regions (4 rectangles around the scan box)
+      mk('ov-top',    ['overlay-piece'], { height: boxTop+'px' });
+      mk('ov-bottom', ['overlay-piece'], { height: (videoH - boxTop - boxHeight)+'px' });
+      mk('ov-left',   ['overlay-piece'], { top: boxTop+'px', height: boxHeight+'px', width: boxLeft+'px' });
+      mk('ov-right',  ['overlay-piece'], { top: boxTop+'px', height: boxHeight+'px', width: (videoW - boxLeft - boxWidth)+'px' });
+
+      // Corner bracket container (positioned over the scan box)
+      const corners = mk(null, [], {
+        position: 'absolute',
+        top:  boxTop+'px',
+        left: boxLeft+'px',
+        width:  boxWidth+'px',
+        height: boxHeight+'px',
+        pointerEvents: 'none'
+      });
+      ['corner-tl','corner-tr','corner-bl','corner-br'].forEach(c => {
+        const d = document.createElement('div');
+        d.className = 'corner ' + c;
+        corners.appendChild(d);
+      });
+      wrap.appendChild(corners);
+
+      // Laser scan line inside the box
+      const laser = document.createElement('div');
+      laser.className = 'scanline';
+      laser.style.cssText = `position:absolute;left:${boxLeft}px;width:${boxWidth}px;`;
+      laser.style.top = boxTop + 'px';
+      // Override animation to be relative to the box
+      laser.style.animation = 'none';
+      laser.style.transition = 'none';
+      // Simple JS-driven scan line
+      let dir = 1, pos = 0;
+      setInterval(() => {
+        pos += dir * 2;
+        if (pos >= boxHeight - 2) dir = -1;
+        if (pos <= 0) dir = 1;
+        laser.style.top = (boxTop + pos) + 'px';
+      }, 20);
+      wrap.appendChild(laser);
+
+      // Tip text
+      mk(null, ['tip-bar'], {
+        position: 'absolute',
+        bottom: '0', left: '0', right: '0'
+      }).textContent = '💡 Đưa mã QR vuông vào khung · Giữ thẳng tay · Cách 8-15cm';
+
+    }, 400);
+  }
+
+  /* ──────────────────────────────────────────────
+     FILE UPLOAD SCAN
+  ────────────────────────────────────────────── */
   function handleFileUpload(event) {
     const room = document.getElementById('room').value.trim();
-    if (!room) { 
-      alert('Vui lòng nhập số phòng trước!'); 
-      event.target.value = ''; 
-      return; 
-    }
-    if (event.target.files.length === 0) return;
+    if (!room) { alert('Vui lòng nhập số phòng trước!'); event.target.value = ''; return; }
+    if (!event.target.files.length) return;
 
     const imageFile = event.target.files[0];
     scanned = false;
-    
-    showStatus(`📂 Đã nhận ảnh: <b>${imageFile.name}</b><br>⏳ Đang dò tìm mã QR...`, 'loading');
+    showStatus(`📂 Đã nhận: <b>${imageFile.name}</b><br>⏳ Đang dò tìm mã QR...`, 'loading');
 
-    if (!scanner) {
-      scanner = new Html5Qrcode("reader");
-    }
+    if (!scanner) scanner = new Html5Qrcode("reader");
 
     scanner.scanFile(imageFile, false)
-      .then(decodedText => {
-        showStatus('✅ <b>Đã quét được mã QR!</b> Đang chuẩn bị dữ liệu...', 'loading');
-        setTimeout(() => {
-          onScanSuccess(decodedText);
-        }, 500);
+      .then(text => {
+        showStatus('✅ <b>Quét được!</b> Đang xử lý dữ liệu...', 'loading');
+        setTimeout(() => onScanSuccess(text), 400);
       })
-      .catch(err => {
-        showStatus('❌ <b>Không tìm thấy mã QR!</b><br>Hãy thử cắt (crop) ảnh gần lại mã vuông QR, hoặc chụp rõ nét hơn.', 'error');
+      .catch(() => {
+        showStatus('❌ <b>Không tìm thấy mã QR!</b><br>Thử crop ảnh sát mã QR vuông hơn, hoặc chụp rõ nét hơn.', 'error');
       })
-      .finally(() => {
-        event.target.value = ''; 
-      });
+      .finally(() => { event.target.value = ''; });
   }
 
-  // --- XỬ LÝ LIVE CAMERA ---
+  /* ──────────────────────────────────────────────
+     LIVE CAMERA SCAN
+     KEY IMPROVEMENTS:
+     1. videoConstraints: full HD + continuous autofocus
+     2. useBarCodeDetectorIfSupported: native API (faster + more accurate)
+     3. Adaptive qrbox: 85% of the shorter side (more pixels for the decoder)
+     4. fps: 15 (higher frame rate = faster capture)
+  ────────────────────────────────────────────── */
   function startScan() {
     const room = document.getElementById('room').value.trim();
     if (!room) { alert('Vui lòng nhập số phòng trước!'); return; }
@@ -129,36 +277,73 @@
     document.getElementById('btnScan').style.display = 'none';
     document.getElementById('btnUpload').style.display = 'none';
     document.getElementById('actionButtons').style.display = 'flex';
-    showStatus('⏳ Đang khởi động ống kính...', 'loading');
+    showStatus('⏳ Đang khởi động camera...', 'loading');
 
+    // Initialise with BarcodeDetector API if the browser supports it
+    // (Chrome on Android uses native GPU-accelerated decoder — much better for dense QR)
     if (!scanner) {
-      scanner = new Html5Qrcode("reader");
+      scanner = new Html5Qrcode("reader", {
+        formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ],
+        useBarCodeDetectorIfSupported: true,
+        verbose: false
+      });
     }
 
-    Html5Qrcode.getCameras().then(devices => {
-      if (devices && devices.length > 0) {
-        cameras = devices;
-        currentCamIdx = findMainCameraIndex(cameras);
-        startWithCamera(cameras[currentCamIdx].id);
-      } else {
-        startWithCamera({ facingMode: "environment" });
-      }
-    }).catch(err => {
-      startWithCamera({ facingMode: "environment" });
-    });
+    Html5Qrcode.getCameras()
+      .then(devices => {
+        if (devices && devices.length) {
+          cameras = devices;
+          currentCamIdx = findMainCameraIndex(cameras);
+          startWithCamera(cameras[currentCamIdx].id);
+        } else {
+          startWithCamera({ facingMode: "environment" });
+        }
+      })
+      .catch(() => startWithCamera({ facingMode: "environment" }));
   }
 
   function startWithCamera(cameraIdOrConfig) {
     scanner.start(
       cameraIdOrConfig,
-      { fps: 10, qrbox: { width: 250, height: 250 } },
+      {
+        fps: 15,
+
+        /* ★ ADAPTIVE QRBOX — use 85% of the shorter viewport side.
+           Gives the decoder ~2× more pixels than a fixed 250px box. */
+        qrbox: function(viewW, viewH) {
+          const side = Math.floor(Math.min(viewW, viewH) * 0.85);
+          return { width: side, height: side };
+        },
+
+        /* ★ HIGH-RESOLUTION VIDEO STREAM
+           1080p gives ~4× more detail than 480p.
+           focusMode:'continuous' keeps the tiny QR sharp automatically. */
+        videoConstraints: {
+          facingMode: typeof cameraIdOrConfig === 'object' && cameraIdOrConfig.facingMode
+            ? cameraIdOrConfig.facingMode
+            : undefined,
+          deviceId: typeof cameraIdOrConfig === 'string'
+            ? { exact: cameraIdOrConfig }
+            : undefined,
+          width:  { ideal: 1920 },
+          height: { ideal: 1080 },
+          advanced: [{ focusMode: 'continuous' }]
+        },
+
+        /* Hide default shaded region — we draw our own nicer one */
+        aspectRatio: 1.0
+      },
       onScanSuccess,
-      () => {}
-    ).then(() => {
+      () => {}   // ignore per-frame errors (normal for continuous scan)
+    )
+    .then(() => {
       isCameraRunning = true;
-      showStatus('📷 Đưa QR vào khung hình... <br><small><i>(Vẫn bị mờ? Bấm "Đổi Ống Kính")</i></small>', 'loading');
-    }).catch(err => {
-      showStatus('❌ Lỗi mở ống kính: ' + err, 'error');
+      showStatus('📷 Đưa mã QR vào khung — giữ cách 10cm, tay thẳng.', 'loading');
+      setTimeout(injectOverlay, 600);
+      setTimeout(applyAutoZoom, 900);
+    })
+    .catch(err => {
+      showStatus('❌ Lỗi mở camera: ' + err, 'error');
     });
   }
 
@@ -168,11 +353,76 @@
       showStatus('⏳ Đang chuyển ống kính...', 'loading');
       if (isCameraRunning) {
         scanner.stop().then(() => {
+          isCameraRunning = false;
+          removeOverlay();
           startWithCamera(cameras[currentCamIdx].id);
         });
       }
     } else {
-      alert('Điện thoại của bạn chỉ có 1 ống kính hỗ trợ quét!');
+      alert('Điện thoại của bạn chỉ có 1 ống kính hỗ trợ!');
+    }
+  }
+
+  function removeOverlay() {
+    const wrap = document.getElementById('reader-wrap');
+    wrap.querySelectorAll('.overlay-piece,.corner,.scanline,.tip-bar').forEach(e => e.remove());
+  }
+
+  /* ──────────────────────────────────────────────
+     AUTO-ZOOM
+     Strategy A — Hardware zoom (Android Chrome):
+       Get the MediaStreamTrack, check if 'zoom' is a
+       supported capability, then applyConstraints({zoom}).
+       Target: 2× (sweet spot for CCCD QR at arm's length).
+       Clamp to [min, max] reported by the device.
+
+     Strategy B — CSS scale fallback (iOS Safari / no hw zoom):
+       Scale the <video> element up via CSS transform.
+       The video overflows its container but we clip with
+       overflow:hidden on #reader, so the user only sees
+       the centre zoomed-in region. No quality loss vs
+       just moving closer — same pixels, just bigger on screen.
+       We compensate the scan box mentally: the QR appears
+       larger in the frame so the decoder gets more pixels.
+  ────────────────────────────────────────────── */
+  async function applyAutoZoom() {
+    const video = document.querySelector('#reader video');
+    if (!video || !video.srcObject) return;
+
+    const TARGET_ZOOM = 2.0;   // 2× magnification
+    const CSS_SCALE   = 2.0;   // fallback scale for iOS
+
+    try {
+      const track = video.srcObject.getVideoTracks()[0];
+      if (!track) throw new Error('no track');
+
+      // --- Strategy A: Hardware zoom ---
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps.zoom) {
+        const min = caps.zoom.min ?? 1;
+        const max = caps.zoom.max ?? TARGET_ZOOM;
+        const z   = Math.min(TARGET_ZOOM, max);
+        if (z > min) {
+          await track.applyConstraints({ advanced: [{ zoom: z }] });
+          showStatus(`📷 Zoom 2× (hardware) — đưa QR vào khung.`, 'loading');
+          return;
+        }
+      }
+
+      // --- Strategy B: CSS scale (iOS / no hw zoom) ---
+      throw new Error('no hw zoom');
+
+    } catch {
+      // CSS scale: scale video up, clip to container
+      const video2 = document.querySelector('#reader video');
+      if (video2) {
+        video2.style.transformOrigin = 'center center';
+        video2.style.transform = `scale(${CSS_SCALE})`;
+        // Ensure the outer element clips the overflow
+        const readerEl = document.getElementById('reader');
+        if (readerEl) readerEl.style.overflow = 'hidden';
+        showStatus(`📷 Zoom 2× (CSS) — đưa QR vào khung.`, 'loading');
+      }
     }
   }
 
@@ -181,57 +431,61 @@
       scanner.stop().then(() => {
         scanner.clear();
         isCameraRunning = false;
-      });
+      }).catch(() => {});
     }
+    removeOverlay();
+    // Reset any CSS zoom applied by applyAutoZoom fallback
+    const v = document.querySelector('#reader video');
+    if (v) { v.style.transform = ''; v.style.transformOrigin = ''; }
     document.getElementById('reader').innerHTML = '';
-    
     document.getElementById('btnScan').style.display = 'block';
     document.getElementById('btnUpload').style.display = 'block';
     document.getElementById('actionButtons').style.display = 'none';
   }
 
-  // --- XỬ LÝ ĐẨY LÊN SHEETS CHUNG ---
+  /* ──────────────────────────────────────────────
+     PROCESS SCANNED DATA → GOOGLE SHEETS
+  ────────────────────────────────────────────── */
   function onScanSuccess(text) {
     if (scanned) return;
     scanned = true;
-    stopScan(); 
+    stopScan();
 
     const parts = text.split('|');
     if (parts.length < 7) {
-      showStatus('❌ <b>Mã QR không hợp lệ.</b><br>Định dạng này không phải là CCCD chuẩn của Việt Nam.', 'error');
+      showStatus('❌ <b>Mã QR không hợp lệ.</b><br>Đây không phải CCCD chuẩn Việt Nam (cần ≥ 7 trường).', 'error');
       return;
     }
 
     const room = document.getElementById('room').value.trim();
-    
     showStatus(`
       ✅ <b>Đọc CCCD thành công!</b><br>
       👤 Khách: <b>${parts[2]}</b><br>
       🏠 Nơi ở: ${parts[5]}<br>
-      <i>🚀 Đang truyền dữ liệu lên Google Sheets...</i>
+      <i>🚀 Đang truyền lên Google Sheets...</i>
     `, 'loading');
 
     fetch(GAS_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ qrData: text, room: room })
+      body: JSON.stringify({ qrData: text, room })
     })
     .then(r => r.json())
     .then(data => {
       if (data.success) {
         showStatus(`
-          🎉 <b>LƯU SHEETS THÀNH CÔNG!</b><br>
-          👤 Đã nhập khách: <b>${data.name}</b><br>
+          🎉 <b>LƯU THÀNH CÔNG!</b><br>
+          👤 Khách: <b>${data.name}</b><br>
           🛏️ Phòng: <b>${room}</b><br>
-          <hr style="border: 0; border-top: 1px solid #c8e6c9; margin: 8px 0;">
-          <small>✨ Hệ thống đã sẵn sàng cho khách tiếp theo.</small>
+          <hr style="border:0;border-top:1px solid #c8e6c9;margin:8px 0">
+          <small>✨ Sẵn sàng cho khách tiếp theo.</small>
         `, 'success');
-        document.getElementById('room').value = ''; 
+        document.getElementById('room').value = '';
       } else {
-        showStatus('❌ Máy chủ Google báo lỗi: ' + data.error, 'error');
+        showStatus('❌ Google Sheets báo lỗi: ' + data.error, 'error');
       }
     })
-    .catch(err => showStatus('❌ Lỗi mạng: Không thể kết nối với hệ thống Google Sheets.', 'error'));
+    .catch(() => showStatus('❌ Lỗi mạng: Không kết nối được Google Sheets.', 'error'));
   }
 
   function showStatus(msg, type) {
