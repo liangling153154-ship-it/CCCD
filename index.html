@@ -145,95 +145,69 @@
   }
 
   /* ──────────────────────────────────────────────
-     OVERLAY: dim outside the scan window,
-     add corner brackets + laser line + tip text
+     OVERLAY
+     Fix for "brackets shifted to top-left":
+       html5-qrcode's #qr-shaded-region reports coords
+       relative to the VIDEO's natural resolution, not the
+       rendered element. After hardware/CSS zoom those
+       numbers are wrong.
+       Solution: ignore shaded-region entirely. Measure the
+       rendered #reader container (post-zoom screen pixels),
+       compute our own centred 85% square, position overlay
+       relative to #reader-wrap.
   ────────────────────────────────────────────── */
   function injectOverlay() {
-    const wrap = document.getElementById('reader-wrap');
+    const wrap     = document.getElementById('reader-wrap');
     const readerEl = document.getElementById('reader');
     if (!readerEl) return;
 
-    // Find the <video> to measure video size
     const video = readerEl.querySelector('video');
-    if (!video) { setTimeout(injectOverlay, 300); return; }
+    if (!video || !video.offsetHeight) { setTimeout(injectOverlay, 300); return; }
 
-    // html5-qrcode puts a shaded region itself; we supersede it
-    // Remove any existing overlay pieces first
-    wrap.querySelectorAll('.overlay-piece,.corner,.scanline,.tip-bar').forEach(e => e.remove());
+    wrap.querySelectorAll('.overlay-piece,.corner,.scanline,.tip-bar,.scan-box').forEach(e => e.remove());
 
-    // Wait one frame for html5-qrcode to insert its own qr-shaded-region
-    setTimeout(() => {
-      // Get the inner scan box dimensions placed by the library
-      const shaded = readerEl.querySelector('#qr-shaded-region');
-      const videoW = video.offsetWidth || readerEl.offsetWidth;
-      const videoH = video.offsetHeight || readerEl.offsetHeight;
+    const W = readerEl.offsetWidth;
+    const H = readerEl.offsetHeight;
+    const side    = Math.floor(Math.min(W, H) * 0.85);
+    const boxLeft = Math.floor((W - side) / 2);
+    const boxTop  = Math.floor((H - side) / 2);
 
-      if (!shaded || !videoH) { injectOverlay(); return; }
+    const mk = (id, cls, extra) => {
+      const d = document.createElement('div');
+      if (id) d.id = id;
+      cls.forEach(c => d.classList.add(c));
+      Object.assign(d.style, { position: 'absolute', pointerEvents: 'none' }, extra);
+      wrap.appendChild(d);
+      return d;
+    };
 
-      const boxLeft   = parseInt(shaded.style.left  || 0);
-      const boxTop    = parseInt(shaded.style.top   || 0);
-      const boxWidth  = parseInt(shaded.style.width || (videoW * 0.75));
-      const boxHeight = parseInt(shaded.style.height || boxWidth);
+    mk('ov-top',    ['overlay-piece'], { top:'0', left:'0', right:'0', height: boxTop+'px' });
+    mk('ov-bottom', ['overlay-piece'], { bottom:'0', left:'0', right:'0', height: (H-boxTop-side)+'px' });
+    mk('ov-left',   ['overlay-piece'], { top: boxTop+'px', left:'0', width: boxLeft+'px', height: side+'px' });
+    mk('ov-right',  ['overlay-piece'], { top: boxTop+'px', right:'0', width: (W-boxLeft-side)+'px', height: side+'px' });
 
-      // Make wrap relatively positioned and cover the full video
-      wrap.style.position = 'relative';
+    const corners = mk(null, ['scan-box'], {
+      top: boxTop+'px', left: boxLeft+'px', width: side+'px', height: side+'px'
+    });
+    ['corner-tl','corner-tr','corner-bl','corner-br'].forEach(c => {
+      const d = document.createElement('div');
+      d.className = 'corner ' + c;
+      corners.appendChild(d);
+    });
 
-      const mk = (id, cls, styles) => {
-        const d = document.createElement('div');
-        if (id) d.id = id;
-        cls.forEach(c => d.classList.add(c));
-        Object.assign(d.style, styles);
-        wrap.appendChild(d);
-        return d;
-      };
+    const laser = mk(null, ['scanline'], { left: boxLeft+'px', width: side+'px', top: boxTop+'px' });
+    laser.style.animation = 'none';
+    let dir = 1, pos = 0;
+    const t = setInterval(() => {
+      if (!document.contains(laser)) { clearInterval(t); return; }
+      pos += dir * 2;
+      if (pos >= side - 2) dir = -1;
+      if (pos <= 0) dir = 1;
+      laser.style.top = (boxTop + pos) + 'px';
+    }, 16);
 
-      // Dim regions (4 rectangles around the scan box)
-      mk('ov-top',    ['overlay-piece'], { height: boxTop+'px' });
-      mk('ov-bottom', ['overlay-piece'], { height: (videoH - boxTop - boxHeight)+'px' });
-      mk('ov-left',   ['overlay-piece'], { top: boxTop+'px', height: boxHeight+'px', width: boxLeft+'px' });
-      mk('ov-right',  ['overlay-piece'], { top: boxTop+'px', height: boxHeight+'px', width: (videoW - boxLeft - boxWidth)+'px' });
-
-      // Corner bracket container (positioned over the scan box)
-      const corners = mk(null, [], {
-        position: 'absolute',
-        top:  boxTop+'px',
-        left: boxLeft+'px',
-        width:  boxWidth+'px',
-        height: boxHeight+'px',
-        pointerEvents: 'none'
-      });
-      ['corner-tl','corner-tr','corner-bl','corner-br'].forEach(c => {
-        const d = document.createElement('div');
-        d.className = 'corner ' + c;
-        corners.appendChild(d);
-      });
-      wrap.appendChild(corners);
-
-      // Laser scan line inside the box
-      const laser = document.createElement('div');
-      laser.className = 'scanline';
-      laser.style.cssText = `position:absolute;left:${boxLeft}px;width:${boxWidth}px;`;
-      laser.style.top = boxTop + 'px';
-      // Override animation to be relative to the box
-      laser.style.animation = 'none';
-      laser.style.transition = 'none';
-      // Simple JS-driven scan line
-      let dir = 1, pos = 0;
-      setInterval(() => {
-        pos += dir * 2;
-        if (pos >= boxHeight - 2) dir = -1;
-        if (pos <= 0) dir = 1;
-        laser.style.top = (boxTop + pos) + 'px';
-      }, 20);
-      wrap.appendChild(laser);
-
-      // Tip text
-      mk(null, ['tip-bar'], {
-        position: 'absolute',
-        bottom: '0', left: '0', right: '0'
-      }).textContent = '💡 Đưa mã QR vuông vào khung · Giữ thẳng tay · Cách 8-15cm';
-
-    }, 400);
+    mk(null, ['tip-bar'], { bottom:'0', left:'0', right:'0' })
+      .textContent = '💡 Đưa QR vào khung · cách 15-20cm · giữ thẳng tay';
   }
 
   /* ──────────────────────────────────────────────
@@ -365,7 +339,7 @@
 
   function removeOverlay() {
     const wrap = document.getElementById('reader-wrap');
-    wrap.querySelectorAll('.overlay-piece,.corner,.scanline,.tip-bar').forEach(e => e.remove());
+    wrap.querySelectorAll('.overlay-piece,.corner,.scanline,.tip-bar,.scan-box').forEach(e => e.remove());
   }
 
   /* ──────────────────────────────────────────────
@@ -389,8 +363,8 @@
     const video = document.querySelector('#reader video');
     if (!video || !video.srcObject) return;
 
-    const TARGET_ZOOM = 2.0;   // 2× magnification
-    const CSS_SCALE   = 2.0;   // fallback scale for iOS
+    const TARGET_ZOOM = 3.0;   // 3× — right distance for CCCD QR
+    const CSS_SCALE   = 3.0;   // fallback scale for iOS
 
     try {
       const track = video.srcObject.getVideoTracks()[0];
@@ -404,7 +378,7 @@
         const z   = Math.min(TARGET_ZOOM, max);
         if (z > min) {
           await track.applyConstraints({ advanced: [{ zoom: z }] });
-          showStatus(`📷 Zoom 2× (hardware) — đưa QR vào khung.`, 'loading');
+          showStatus(`📷 Zoom 3× (hardware) — đưa QR vào khung.`, 'loading');
           return;
         }
       }
@@ -421,7 +395,7 @@
         // Ensure the outer element clips the overflow
         const readerEl = document.getElementById('reader');
         if (readerEl) readerEl.style.overflow = 'hidden';
-        showStatus(`📷 Zoom 2× (CSS) — đưa QR vào khung.`, 'loading');
+        showStatus(`📷 Zoom 3× (CSS) — đưa QR vào khung.`, 'loading');
       }
     }
   }
