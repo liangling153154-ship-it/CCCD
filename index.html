@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Check-in CCCD - Sen's Homestay</title>
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, sans-serif; max-width: 480px; margin: auto; padding: 20px; background: #f4f7f9; }
@@ -14,68 +13,57 @@
     input[type="text"] { width: 100%; padding: 14px; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 16px; }
     input[type="text"]:focus { border-color: #1a73e8; outline: none; }
     button { width: 100%; padding: 14px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; margin-bottom: 8px; }
-    .btn-scan { background: #1a73e8; color: white; }
+    .btn-scan   { background: #1a73e8; color: white; }
     .btn-scan:active { background: #1557b0; }
-    .btn-upload-label { background: #34a853; color: white; display: block; text-align: center; width: 100%; padding: 14px; font-size: 16px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s; margin-bottom: 8px; }
+    .btn-upload-label { background: #34a853; color: white; display: block; text-align: center; width: 100%; padding: 14px; font-size: 16px; border-radius: 8px; cursor: pointer; font-weight: bold; margin-bottom: 8px; }
     .btn-upload-label:active { background: #2d8e47; }
     .action-buttons { display: none; gap: 10px; margin-bottom: 8px; }
-    .btn-stop { background: #e53935; color: white; flex: 1; margin-bottom: 0; }
-    .btn-switch { background: #fbbc04; color: #333; flex: 1; margin-bottom: 0; }
+    .btn-stop   { background: #e53935; color: white; flex: 1; margin-bottom: 0; }
+    .btn-switch { background: #fbbc04; color: #333;  flex: 1; margin-bottom: 0; }
 
-    /* --- VIEWFINDER OVERLAY --- */
-    #reader-wrap { position: relative; margin: 12px 0; }
-    #reader { border-radius: 8px; overflow: hidden; border: none !important; }
-
-    /* Dim everything OUTSIDE the scan window */
-    .overlay-piece {
-      position: absolute;
-      background: rgba(0,0,0,0.45);
-      pointer-events: none;
+    /* ── Viewfinder ── */
+    #vf-wrap {
+      position: relative; margin: 12px 0;
+      border-radius: 8px; overflow: hidden;
+      background: #000;
+      display: none;
     }
-    #ov-top    { top:0; left:0; right:0; }
-    #ov-bottom { left:0; right:0; bottom:0; }
-    #ov-left   { left:0; }
-    #ov-right  { right:0; }
+    #vf-video {
+      display: block; width: 100%;
+      /* intentional: height set by JS after stream starts */
+    }
+    /* Canvas used for BarcodeDetector (hidden) */
+    #vf-canvas { display: none; }
 
-    /* Animated corner brackets */
+    /* 4 dim pieces */
+    .ov { position: absolute; background: rgba(0,0,0,0.5); pointer-events: none; }
+
+    /* Corner brackets */
     .corner {
-      position: absolute;
-      width: 22px;
-      height: 22px;
-      border-color: #fff;
-      border-style: solid;
+      position: absolute; width: 24px; height: 24px;
+      border-color: #fff; border-style: solid; pointer-events: none;
+    }
+    .corner-tl { top:0; left:0;  border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
+    .corner-tr { top:0; right:0; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
+    .corner-bl { bottom:0; left:0;  border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
+    .corner-br { bottom:0; right:0; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
+
+    /* Laser */
+    #laser {
+      position: absolute; left: 0; height: 2px;
+      background: linear-gradient(to right, transparent, #1a73e8 25%, #1a73e8 75%, transparent);
+      box-shadow: 0 0 6px 2px rgba(26,115,232,0.6);
       pointer-events: none;
     }
-    .corner-tl { top: 0; left: 0; border-width: 3px 0 0 3px; border-radius: 4px 0 0 0; }
-    .corner-tr { top: 0; right: 0; border-width: 3px 3px 0 0; border-radius: 0 4px 0 0; }
-    .corner-bl { bottom: 0; left: 0; border-width: 0 0 3px 3px; border-radius: 0 0 0 4px; }
-    .corner-br { bottom: 0; right: 0; border-width: 0 3px 3px 0; border-radius: 0 0 4px 0; }
-
-    /* Laser scan line */
-    @keyframes scanline { 0%{top:0%} 50%{top:94%} 100%{top:0%} }
-    .scanline {
-      position: absolute;
-      left: 0; right: 0;
-      height: 2px;
-      background: linear-gradient(to right, transparent, #1a73e8 30%, #1a73e8 70%, transparent);
-      box-shadow: 0 0 6px 1px rgba(26,115,232,0.7);
-      pointer-events: none;
-      animation: scanline 2s ease-in-out infinite;
-    }
-
-    /* Tip bar (camera quality hint) */
-    .tip-bar {
-      position: absolute;
-      bottom: 0; left: 0; right: 0;
-      background: rgba(0,0,0,0.55);
-      color: #ffffffcc;
-      font-size: 12px;
-      text-align: center;
-      padding: 6px 8px;
+    /* Tip */
+    #tip {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      background: rgba(0,0,0,0.6); color: #ffffffcc;
+      font-size: 12px; text-align: center; padding: 6px;
       pointer-events: none;
     }
 
-    #status { padding: 16px; border-radius: 8px; display: none; margin-top: 12px; font-size: 15px; line-height: 1.6; transition: 0.3s; }
+    #status { padding: 16px; border-radius: 8px; display: none; margin-top: 12px; font-size: 15px; line-height: 1.6; }
     .success { background: #e8f5e9; border-left: 4px solid #43a047; color: #1e4620; }
     .error   { background: #ffebee; border-left: 4px solid #e53935; color: #b71c1c; }
     .loading { background: #e8f0fe; border-left: 4px solid #1a73e8; color: #0d47a1; }
@@ -96,378 +84,368 @@
 
   <button class="btn-scan" id="btnScan" onclick="startScan()">📷 Mở Camera Quét QR</button>
 
-  <label for="qr-input-file" class="btn-upload-label" id="btnUpload">📂 Tải Ảnh Có Sẵn</label>
-  <input type="file" id="qr-input-file" accept="image/*" style="display:none" onchange="handleFileUpload(event)">
+  <label for="file-input" class="btn-upload-label" id="btnUpload">📂 Tải Ảnh Có Sẵn</label>
+  <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFile(event)">
 
-  <div class="action-buttons" id="actionButtons">
-    <button class="btn-stop" onclick="stopScan()">⏹ Dừng</button>
-    <button class="btn-switch" onclick="switchCamera()">🔄 Đổi Ống Kính</button>
+  <div class="action-buttons" id="actionBtns">
+    <button class="btn-stop"   onclick="stopScan()">⏹ Dừng</button>
+    <button class="btn-switch" onclick="switchCam()">🔄 Đổi Ống Kính</button>
   </div>
 
-  <!-- Viewfinder wrapper (overlay injected by JS after scanner starts) -->
-  <div id="reader-wrap">
-    <div id="reader"></div>
+  <!-- Custom viewfinder (no 3rd-party library DOM) -->
+  <div id="vf-wrap">
+    <video id="vf-video" autoplay playsinline muted></video>
+    <canvas id="vf-canvas"></canvas>
+    <!-- overlay elements injected by JS -->
   </div>
 
   <div id="status"></div>
 </div>
 
 <script>
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbzW5SfriqLXKG9vGLHW-0EyCzVD_B3OXimJT_4-6b-C-QN-lbqJOdl0qiCkQ4ZPVt8_FA/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbzW5SfriqLXKG9vGLHW-0EyCzVD_B3OXimJT_4-6b-C-QN-lbqJOdl0qiCkQ4ZPVt8_FA/exec';
 
-  let scanner = null;
-  let scanned = false;
-  let cameras = [];
-  let currentCamIdx = 0;
-  let isCameraRunning = false;
+/* ═══════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════ */
+let stream       = null;   // MediaStream
+let cameras      = [];
+let camIdx       = 0;
+let scanLoop     = null;   // requestAnimationFrame handle
+let scanned      = false;
+let decoder      = null;   // BarcodeDetector instance (if supported)
+let fallbackLib  = null;   // Html5Qrcode instance (fallback)
+let laserTimer   = null;
+let laserDir     = 1;
+let laserPos     = 0;
 
-  /* ──────────────────────────────────────────────
-     PICK THE BEST REAR CAMERA
-     Priority: labeled "back 0" / "main" first,
-     avoid ultra-wide / front / tele.
-  ────────────────────────────────────────────── */
-  function findMainCameraIndex(devices) {
-    if (!devices || devices.length <= 1) return 0;
-    const score = lbl => {
-      lbl = lbl.toLowerCase();
-      if (lbl.includes('front') || lbl.includes('trước')) return -1;
-      if (lbl.includes('ultra') || lbl.includes('wide') || lbl.includes('tele')) return 0;
-      if (lbl.includes('back') || lbl.includes('sau')) return 3;
-      if (lbl.includes('main') || lbl.includes('chính')) return 2;
-      if (lbl.includes('0'))  return 2;
-      return 1;
-    };
-    let best = 0;
-    for (let i = 1; i < devices.length; i++) {
-      if (score(devices[i].label) > score(devices[best].label)) best = i;
+const video  = document.getElementById('vf-video');
+const canvas = document.getElementById('vf-canvas');
+const wrap   = document.getElementById('vf-wrap');
+const ctx    = canvas.getContext('2d', { willReadFrequently: true });
+
+/* ═══════════════════════════════════════════════════════
+   DETECT ENGINE
+   Priority:
+   1. Native BarcodeDetector (Chrome Android / Samsung)  ← fastest
+   2. html5-qrcode (cross-platform fallback)
+═══════════════════════════════════════════════════════ */
+const HAS_BARCODE_DETECTOR = ('BarcodeDetector' in window);
+
+function initDecoder() {
+  if (HAS_BARCODE_DETECTOR) {
+    decoder = new BarcodeDetector({ formats: ['qr_code'] });
+    showStatus('🚀 Dùng BarcodeDetector API (tốc độ cao nhất).', 'loading');
+  } else {
+    showStatus('⚠️ Trình duyệt không hỗ trợ BarcodeDetector, dùng fallback.', 'loading');
+    loadFallback();
+  }
+}
+
+function loadFallback() {
+  if (window.Html5Qrcode) return;
+  const s = document.createElement('script');
+  s.src = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+  s.onload = () => console.log('html5-qrcode loaded');
+  document.head.appendChild(s);
+}
+
+/* ═══════════════════════════════════════════════════════
+   CAMERA HELPERS
+═══════════════════════════════════════════════════════ */
+function scoreCam(label) {
+  const l = label.toLowerCase();
+  if (l.includes('front') || l.includes('trước')) return -1;
+  if (l.includes('ultra') || l.includes('wide')  || l.includes('tele')) return 0;
+  if (l.includes('back')  || l.includes('sau'))   return 3;
+  if (l.includes('main')  || l.includes('0'))     return 2;
+  return 1;
+}
+
+async function getCameras() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  cameras = devices.filter(d => d.kind === 'videoinput');
+  // pick best rear cam
+  let best = 0;
+  for (let i = 1; i < cameras.length; i++) {
+    if (scoreCam(cameras[i].label) > scoreCam(cameras[best].label)) best = i;
+  }
+  camIdx = best;
+}
+
+async function openCamera(deviceId) {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+
+  const constraints = {
+    video: {
+      deviceId: deviceId ? { exact: deviceId } : undefined,
+      facingMode: deviceId ? undefined : 'environment',
+      width:  { ideal: 1920 },
+      height: { ideal: 1080 },
+      advanced: [{ focusMode: 'continuous' }]
     }
-    return best;
-  }
+  };
 
-  /* ──────────────────────────────────────────────
-     OVERLAY
-     Fix for "brackets shifted to top-left":
-       html5-qrcode's #qr-shaded-region reports coords
-       relative to the VIDEO's natural resolution, not the
-       rendered element. After hardware/CSS zoom those
-       numbers are wrong.
-       Solution: ignore shaded-region entirely. Measure the
-       rendered #reader container (post-zoom screen pixels),
-       compute our own centred 85% square, position overlay
-       relative to #reader-wrap.
-  ────────────────────────────────────────────── */
-  function injectOverlay() {
-    const wrap     = document.getElementById('reader-wrap');
-    const readerEl = document.getElementById('reader');
-    if (!readerEl) return;
+  stream = await navigator.mediaDevices.getUserMedia(constraints);
+  video.srcObject = stream;
+  await video.play();
 
-    const video = readerEl.querySelector('video');
-    if (!video || !video.offsetHeight) { setTimeout(injectOverlay, 300); return; }
-
-    wrap.querySelectorAll('.overlay-piece,.corner,.scanline,.tip-bar,.scan-box').forEach(e => e.remove());
-
-    const W = readerEl.offsetWidth;
-    const H = readerEl.offsetHeight;
-    const side    = Math.floor(Math.min(W, H) * 0.85);
-    const boxLeft = Math.floor((W - side) / 2);
-    const boxTop  = Math.floor((H - side) / 2);
-
-    const mk = (id, cls, extra) => {
-      const d = document.createElement('div');
-      if (id) d.id = id;
-      cls.forEach(c => d.classList.add(c));
-      Object.assign(d.style, { position: 'absolute', pointerEvents: 'none' }, extra);
-      wrap.appendChild(d);
-      return d;
-    };
-
-    mk('ov-top',    ['overlay-piece'], { top:'0', left:'0', right:'0', height: boxTop+'px' });
-    mk('ov-bottom', ['overlay-piece'], { bottom:'0', left:'0', right:'0', height: (H-boxTop-side)+'px' });
-    mk('ov-left',   ['overlay-piece'], { top: boxTop+'px', left:'0', width: boxLeft+'px', height: side+'px' });
-    mk('ov-right',  ['overlay-piece'], { top: boxTop+'px', right:'0', width: (W-boxLeft-side)+'px', height: side+'px' });
-
-    const corners = mk(null, ['scan-box'], {
-      top: boxTop+'px', left: boxLeft+'px', width: side+'px', height: side+'px'
-    });
-    ['corner-tl','corner-tr','corner-bl','corner-br'].forEach(c => {
-      const d = document.createElement('div');
-      d.className = 'corner ' + c;
-      corners.appendChild(d);
-    });
-
-    const laser = mk(null, ['scanline'], { left: boxLeft+'px', width: side+'px', top: boxTop+'px' });
-    laser.style.animation = 'none';
-    let dir = 1, pos = 0;
-    const t = setInterval(() => {
-      if (!document.contains(laser)) { clearInterval(t); return; }
-      pos += dir * 2;
-      if (pos >= side - 2) dir = -1;
-      if (pos <= 0) dir = 1;
-      laser.style.top = (boxTop + pos) + 'px';
-    }, 16);
-
-    mk(null, ['tip-bar'], { bottom:'0', left:'0', right:'0' })
-      .textContent = '💡 Đưa QR vào khung · cách 15-20cm · giữ thẳng tay';
-  }
-
-  /* ──────────────────────────────────────────────
-     FILE UPLOAD SCAN
-  ────────────────────────────────────────────── */
-  function handleFileUpload(event) {
-    const room = document.getElementById('room').value.trim();
-    if (!room) { alert('Vui lòng nhập số phòng trước!'); event.target.value = ''; return; }
-    if (!event.target.files.length) return;
-
-    const imageFile = event.target.files[0];
-    scanned = false;
-    showStatus(`📂 Đã nhận: <b>${imageFile.name}</b><br>⏳ Đang dò tìm mã QR...`, 'loading');
-
-    if (!scanner) scanner = new Html5Qrcode("reader");
-
-    scanner.scanFile(imageFile, false)
-      .then(text => {
-        showStatus('✅ <b>Quét được!</b> Đang xử lý dữ liệu...', 'loading');
-        setTimeout(() => onScanSuccess(text), 400);
-      })
-      .catch(() => {
-        showStatus('❌ <b>Không tìm thấy mã QR!</b><br>Thử crop ảnh sát mã QR vuông hơn, hoặc chụp rõ nét hơn.', 'error');
-      })
-      .finally(() => { event.target.value = ''; });
-  }
-
-  /* ──────────────────────────────────────────────
-     LIVE CAMERA SCAN
-     KEY IMPROVEMENTS:
-     1. videoConstraints: full HD + continuous autofocus
-     2. useBarCodeDetectorIfSupported: native API (faster + more accurate)
-     3. Adaptive qrbox: 85% of the shorter side (more pixels for the decoder)
-     4. fps: 15 (higher frame rate = faster capture)
-  ────────────────────────────────────────────── */
-  function startScan() {
-    const room = document.getElementById('room').value.trim();
-    if (!room) { alert('Vui lòng nhập số phòng trước!'); return; }
-
-    scanned = false;
-    document.getElementById('btnScan').style.display = 'none';
-    document.getElementById('btnUpload').style.display = 'none';
-    document.getElementById('actionButtons').style.display = 'flex';
-    showStatus('⏳ Đang khởi động camera...', 'loading');
-
-    // Initialise with BarcodeDetector API if the browser supports it
-    // (Chrome on Android uses native GPU-accelerated decoder — much better for dense QR)
-    if (!scanner) {
-      scanner = new Html5Qrcode("reader", {
-        formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ],
-        useBarCodeDetectorIfSupported: true,
-        verbose: false
-      });
+  // Apply hardware zoom (3×) if supported
+  const track = stream.getVideoTracks()[0];
+  const caps  = track.getCapabilities ? track.getCapabilities() : {};
+  if (caps.zoom) {
+    const z = Math.min(3, caps.zoom.max ?? 3);
+    if (z > (caps.zoom.min ?? 1)) {
+      await track.applyConstraints({ advanced: [{ zoom: z }] });
     }
+  }
 
-    Html5Qrcode.getCameras()
-      .then(devices => {
-        if (devices && devices.length) {
-          cameras = devices;
-          currentCamIdx = findMainCameraIndex(cameras);
-          startWithCamera(cameras[currentCamIdx].id);
-        } else {
-          startWithCamera({ facingMode: "environment" });
+  // Size the viewfinder container to match rendered video
+  wrap.style.display = 'block';
+  // Let the video establish dimensions then draw overlay
+  setTimeout(drawOverlay, 400);
+}
+
+/* ═══════════════════════════════════════════════════════
+   SCAN LOOP  —  BarcodeDetector path
+   We decode directly from the live <video> element.
+   BarcodeDetector.detect(video) uses the GPU/ML accelerator;
+   it does NOT need us to draw to canvas first.
+═══════════════════════════════════════════════════════ */
+function startNativeLoop() {
+  if (scanLoop) cancelAnimationFrame(scanLoop);
+
+  async function tick() {
+    if (!stream || scanned) return;
+    if (video.readyState >= 2) {
+      try {
+        const codes = await decoder.detect(video);
+        if (codes.length > 0) {
+          onDecoded(codes[0].rawValue);
+          return;   // stop loop
         }
-      })
-      .catch(() => startWithCamera({ facingMode: "environment" }));
+      } catch(_) {}
+    }
+    scanLoop = requestAnimationFrame(tick);
   }
+  scanLoop = requestAnimationFrame(tick);
+}
 
-  function startWithCamera(cameraIdOrConfig) {
-    scanner.start(
-      cameraIdOrConfig,
-      {
-        fps: 15,
+/* ═══════════════════════════════════════════════════════
+   SCAN LOOP  —  html5-qrcode fallback
+   Mount a hidden html5-qrcode instance on a throwaway div.
+═══════════════════════════════════════════════════════ */
+function startFallbackLoop(deviceId) {
+  // Create a hidden container for html5-qrcode
+  let fb = document.getElementById('_fb');
+  if (!fb) { fb = document.createElement('div'); fb.id = '_fb'; fb.style.display='none'; document.body.appendChild(fb); }
 
-        /* ★ ADAPTIVE QRBOX — use 85% of the shorter viewport side.
-           Gives the decoder ~2× more pixels than a fixed 250px box. */
-        qrbox: function(viewW, viewH) {
-          const side = Math.floor(Math.min(viewW, viewH) * 0.85);
-          return { width: side, height: side };
-        },
+  if (fallbackLib) { try { fallbackLib.stop().catch(()=>{}); } catch(_){} }
 
-        /* ★ HIGH-RESOLUTION VIDEO STREAM
-           1080p gives ~4× more detail than 480p.
-           focusMode:'continuous' keeps the tiny QR sharp automatically. */
-        videoConstraints: {
-          facingMode: typeof cameraIdOrConfig === 'object' && cameraIdOrConfig.facingMode
-            ? cameraIdOrConfig.facingMode
-            : undefined,
-          deviceId: typeof cameraIdOrConfig === 'string'
-            ? { exact: cameraIdOrConfig }
-            : undefined,
-          width:  { ideal: 1920 },
-          height: { ideal: 1080 },
-          advanced: [{ focusMode: 'continuous' }]
-        },
+  fallbackLib = new Html5Qrcode('_fb', {
+    formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
+    useBarCodeDetectorIfSupported: true,
+    verbose: false
+  });
 
-        /* Hide default shaded region — we draw our own nicer one */
-        aspectRatio: 1.0
-      },
-      onScanSuccess,
-      () => {}   // ignore per-frame errors (normal for continuous scan)
-    )
-    .then(() => {
-      isCameraRunning = true;
-      showStatus('📷 Đưa mã QR vào khung — giữ cách 10cm, tay thẳng.', 'loading');
-      setTimeout(injectOverlay, 600);
-      setTimeout(applyAutoZoom, 900);
-    })
-    .catch(err => {
-      showStatus('❌ Lỗi mở camera: ' + err, 'error');
-    });
-  }
+  const cfg = deviceId ? deviceId : { facingMode: 'environment' };
+  fallbackLib.start(cfg, {
+    fps: 15,
+    qrbox: { width: 300, height: 300 },
+    videoConstraints: { width:{ideal:1920}, height:{ideal:1080}, advanced:[{focusMode:'continuous'}] }
+  }, text => onDecoded(text), ()=>{});
+}
 
-  function switchCamera() {
-    if (cameras.length > 1) {
-      currentCamIdx = (currentCamIdx + 1) % cameras.length;
-      showStatus('⏳ Đang chuyển ống kính...', 'loading');
-      if (isCameraRunning) {
-        scanner.stop().then(() => {
-          isCameraRunning = false;
-          removeOverlay();
-          startWithCamera(cameras[currentCamIdx].id);
-        });
-      }
+/* ═══════════════════════════════════════════════════════
+   OVERLAY  —  custom viewfinder on top of <video>
+═══════════════════════════════════════════════════════ */
+function drawOverlay() {
+  // Remove old overlay
+  wrap.querySelectorAll('.ov,.corner,#laser,#tip,.box-frame').forEach(e => e.remove());
+  if (laserTimer) { clearInterval(laserTimer); laserTimer = null; }
+
+  const W = video.offsetWidth  || wrap.offsetWidth;
+  const H = video.offsetHeight || wrap.offsetHeight || W;
+  if (!W || !H) { setTimeout(drawOverlay, 200); return; }
+
+  const side = Math.floor(Math.min(W, H) * 0.85);
+  const bL   = Math.floor((W - side) / 2);
+  const bT   = Math.floor((H - side) / 2);
+
+  const mk = (tag, styles, parent) => {
+    const el = document.createElement(tag || 'div');
+    Object.assign(el.style, styles);
+    (parent || wrap).appendChild(el);
+    return el;
+  };
+
+  // 4 dim panes
+  const base = { position:'absolute', pointerEvents:'none' };
+  mk('div', {...base, top:'0',     left:'0', right:'0',   height: bT+'px',             background:'rgba(0,0,0,0.5)'   }).className='ov';
+  mk('div', {...base, bottom:'0',  left:'0', right:'0',   height: (H-bT-side)+'px',    background:'rgba(0,0,0,0.5)'   }).className='ov';
+  mk('div', {...base, top:bT+'px', left:'0', width:bL+'px', height:side+'px',           background:'rgba(0,0,0,0.5)'   }).className='ov';
+  mk('div', {...base, top:bT+'px', right:'0', width:(W-bL-side)+'px', height:side+'px', background:'rgba(0,0,0,0.5)'  }).className='ov';
+
+  // Corner bracket container
+  const frame = mk('div', { ...base, top:bT+'px', left:bL+'px', width:side+'px', height:side+'px' });
+  frame.className = 'box-frame';
+  ['corner-tl','corner-tr','corner-bl','corner-br'].forEach(c => {
+    const d = document.createElement('div');
+    d.className = 'corner ' + c;
+    frame.appendChild(d);
+  });
+
+  // Laser line
+  const laser = mk('div', { ...base, id:'laser', left:bL+'px', width:side+'px', top:bT+'px' });
+  laser.id = 'laser';
+  laserDir = 1; laserPos = 0;
+  laserTimer = setInterval(() => {
+    if (!document.contains(laser)) { clearInterval(laserTimer); return; }
+    laserPos += laserDir * 2;
+    if (laserPos >= side - 2) laserDir = -1;
+    if (laserPos <= 0)        laserDir = 1;
+    laser.style.top = (bT + laserPos) + 'px';
+  }, 16);
+
+  // Tip
+  const tip = mk('div', { ...base, bottom:'0', left:'0', right:'0', background:'rgba(0,0,0,0.6)', color:'#ffffffcc', fontSize:'12px', textAlign:'center', padding:'6px' });
+  tip.id = 'tip';
+  tip.textContent = '💡 Đưa QR vào khung · cách 15-20cm · giữ thẳng tay';
+}
+
+/* ═══════════════════════════════════════════════════════
+   PUBLIC ACTIONS
+═══════════════════════════════════════════════════════ */
+async function startScan() {
+  const room = document.getElementById('room').value.trim();
+  if (!room) { alert('Vui lòng nhập số phòng trước!'); return; }
+
+  scanned = false;
+  document.getElementById('btnScan').style.display   = 'none';
+  document.getElementById('btnUpload').style.display = 'none';
+  document.getElementById('actionBtns').style.display = 'flex';
+  showStatus('⏳ Đang khởi động camera...', 'loading');
+
+  try {
+    await getCameras();
+    const devId = cameras[camIdx]?.deviceId;
+
+    if (HAS_BARCODE_DETECTOR) {
+      await openCamera(devId);
+      startNativeLoop();
+      showStatus('📷 BarcodeDetector — đưa QR vào khung.', 'loading');
     } else {
-      alert('Điện thoại của bạn chỉ có 1 ống kính hỗ trợ!');
+      // Fallback: open camera via html5-qrcode (manages its own video)
+      wrap.style.display = 'none';  // hide our custom video; library uses its own
+      startFallbackLoop(devId);
+      showStatus('📷 Đưa QR vào khung.', 'loading');
     }
+  } catch(err) {
+    showStatus('❌ Lỗi mở camera: ' + err, 'error');
   }
+}
 
-  function removeOverlay() {
-    const wrap = document.getElementById('reader-wrap');
-    wrap.querySelectorAll('.overlay-piece,.corner,.scanline,.tip-bar,.scan-box').forEach(e => e.remove());
-  }
+async function switchCam() {
+  if (cameras.length < 2) { alert('Chỉ có 1 ống kính!'); return; }
+  camIdx = (camIdx + 1) % cameras.length;
+  if (scanLoop) { cancelAnimationFrame(scanLoop); scanLoop = null; }
+  await openCamera(cameras[camIdx].deviceId);
+  if (HAS_BARCODE_DETECTOR) startNativeLoop();
+}
 
-  /* ──────────────────────────────────────────────
-     AUTO-ZOOM
-     Strategy A — Hardware zoom (Android Chrome):
-       Get the MediaStreamTrack, check if 'zoom' is a
-       supported capability, then applyConstraints({zoom}).
-       Target: 2× (sweet spot for CCCD QR at arm's length).
-       Clamp to [min, max] reported by the device.
+function stopScan() {
+  // Stop native loop
+  if (scanLoop) { cancelAnimationFrame(scanLoop); scanLoop = null; }
+  // Stop stream tracks
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  video.srcObject = null;
+  // Stop fallback lib
+  if (fallbackLib) { try { fallbackLib.stop().catch(()=>{}); } catch(_){} fallbackLib = null; }
+  // Clean up overlay
+  wrap.querySelectorAll('.ov,.corner,#laser,#tip,.box-frame').forEach(e => e.remove());
+  if (laserTimer) { clearInterval(laserTimer); laserTimer = null; }
+  wrap.style.display = 'none';
 
-     Strategy B — CSS scale fallback (iOS Safari / no hw zoom):
-       Scale the <video> element up via CSS transform.
-       The video overflows its container but we clip with
-       overflow:hidden on #reader, so the user only sees
-       the centre zoomed-in region. No quality loss vs
-       just moving closer — same pixels, just bigger on screen.
-       We compensate the scan box mentally: the QR appears
-       larger in the frame so the decoder gets more pixels.
-  ────────────────────────────────────────────── */
-  async function applyAutoZoom() {
-    const video = document.querySelector('#reader video');
-    if (!video || !video.srcObject) return;
+  document.getElementById('btnScan').style.display   = 'block';
+  document.getElementById('btnUpload').style.display = 'block';
+  document.getElementById('actionBtns').style.display = 'none';
+}
 
-    const TARGET_ZOOM = 3.0;   // 3× — right distance for CCCD QR
-    const CSS_SCALE   = 3.0;   // fallback scale for iOS
+/* ═══════════════════════════════════════════════════════
+   FILE UPLOAD
+═══════════════════════════════════════════════════════ */
+async function handleFile(event) {
+  const room = document.getElementById('room').value.trim();
+  if (!room) { alert('Vui lòng nhập số phòng trước!'); event.target.value=''; return; }
+  const file = event.target.files[0];
+  if (!file) return;
 
+  showStatus(`📂 <b>${file.name}</b> — đang tìm mã QR...`, 'loading');
+
+  if (HAS_BARCODE_DETECTOR) {
     try {
-      const track = video.srcObject.getVideoTracks()[0];
-      if (!track) throw new Error('no track');
-
-      // --- Strategy A: Hardware zoom ---
-      const caps = track.getCapabilities ? track.getCapabilities() : {};
-      if (caps.zoom) {
-        const min = caps.zoom.min ?? 1;
-        const max = caps.zoom.max ?? TARGET_ZOOM;
-        const z   = Math.min(TARGET_ZOOM, max);
-        if (z > min) {
-          await track.applyConstraints({ advanced: [{ zoom: z }] });
-          showStatus(`📷 Zoom 3× (hardware) — đưa QR vào khung.`, 'loading');
-          return;
-        }
-      }
-
-      // --- Strategy B: CSS scale (iOS / no hw zoom) ---
-      throw new Error('no hw zoom');
-
-    } catch {
-      // CSS scale: scale video up, clip to container
-      const video2 = document.querySelector('#reader video');
-      if (video2) {
-        video2.style.transformOrigin = 'center center';
-        video2.style.transform = `scale(${CSS_SCALE})`;
-        // Ensure the outer element clips the overflow
-        const readerEl = document.getElementById('reader');
-        if (readerEl) readerEl.style.overflow = 'hidden';
-        showStatus(`📷 Zoom 3× (CSS) — đưa QR vào khung.`, 'loading');
-      }
+      const bmp = await createImageBitmap(file);
+      const codes = await decoder.detect(bmp);
+      if (codes.length) { onDecoded(codes[0].rawValue); }
+      else showStatus('❌ Không tìm thấy QR. Thử crop ảnh gần hơn.', 'error');
+    } catch(e) {
+      showStatus('❌ Lỗi đọc ảnh: ' + e, 'error');
     }
+  } else {
+    // fallback via html5-qrcode file scan
+    if (!window.Html5Qrcode) { showStatus('⏳ Đang tải thư viện, thử lại sau 2s...','loading'); return; }
+    const tmp = new Html5Qrcode('_tmp_' + Date.now());
+    tmp.scanFile(file, false)
+      .then(t => onDecoded(t))
+      .catch(() => showStatus('❌ Không tìm thấy QR.', 'error'));
+  }
+  event.target.value = '';
+}
+
+/* ═══════════════════════════════════════════════════════
+   DECODE RESULT → GOOGLE SHEETS
+═══════════════════════════════════════════════════════ */
+function onDecoded(text) {
+  if (scanned) return;
+  scanned = true;
+  stopScan();
+
+  const parts = text.split('|');
+  if (parts.length < 7) {
+    showStatus('❌ <b>QR không hợp lệ</b> — không phải CCCD chuẩn VN (cần ≥ 7 trường).', 'error');
+    return;
   }
 
-  function stopScan() {
-    if (scanner && isCameraRunning) {
-      scanner.stop().then(() => {
-        scanner.clear();
-        isCameraRunning = false;
-      }).catch(() => {});
+  const room = document.getElementById('room').value.trim();
+  showStatus(`✅ <b>Đọc CCCD thành công!</b><br>👤 <b>${parts[2]}</b><br>🏠 ${parts[5]}<br><i>🚀 Đang lưu lên Sheets...</i>`, 'loading');
+
+  fetch(GAS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ qrData: text, room })
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.success) {
+      showStatus(`🎉 <b>LƯU THÀNH CÔNG!</b><br>👤 <b>${d.name}</b><br>🛏️ Phòng <b>${room}</b><hr style="border:0;border-top:1px solid #c8e6c9;margin:8px 0"><small>✨ Sẵn sàng khách tiếp theo.</small>`, 'success');
+      document.getElementById('room').value = '';
+    } else {
+      showStatus('❌ Sheets báo lỗi: ' + d.error, 'error');
     }
-    removeOverlay();
-    // Reset any CSS zoom applied by applyAutoZoom fallback
-    const v = document.querySelector('#reader video');
-    if (v) { v.style.transform = ''; v.style.transformOrigin = ''; }
-    document.getElementById('reader').innerHTML = '';
-    document.getElementById('btnScan').style.display = 'block';
-    document.getElementById('btnUpload').style.display = 'block';
-    document.getElementById('actionButtons').style.display = 'none';
-  }
+  })
+  .catch(() => showStatus('❌ Lỗi mạng — không kết nối được Sheets.', 'error'));
+}
 
-  /* ──────────────────────────────────────────────
-     PROCESS SCANNED DATA → GOOGLE SHEETS
-  ────────────────────────────────────────────── */
-  function onScanSuccess(text) {
-    if (scanned) return;
-    scanned = true;
-    stopScan();
+function showStatus(msg, type) {
+  const el = document.getElementById('status');
+  el.style.display = 'block';
+  el.className = type;
+  el.innerHTML = msg;
+}
 
-    const parts = text.split('|');
-    if (parts.length < 7) {
-      showStatus('❌ <b>Mã QR không hợp lệ.</b><br>Đây không phải CCCD chuẩn Việt Nam (cần ≥ 7 trường).', 'error');
-      return;
-    }
-
-    const room = document.getElementById('room').value.trim();
-    showStatus(`
-      ✅ <b>Đọc CCCD thành công!</b><br>
-      👤 Khách: <b>${parts[2]}</b><br>
-      🏠 Nơi ở: ${parts[5]}<br>
-      <i>🚀 Đang truyền lên Google Sheets...</i>
-    `, 'loading');
-
-    fetch(GAS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ qrData: text, room })
-    })
-    .then(r => r.json())
-    .then(data => {
-      if (data.success) {
-        showStatus(`
-          🎉 <b>LƯU THÀNH CÔNG!</b><br>
-          👤 Khách: <b>${data.name}</b><br>
-          🛏️ Phòng: <b>${room}</b><br>
-          <hr style="border:0;border-top:1px solid #c8e6c9;margin:8px 0">
-          <small>✨ Sẵn sàng cho khách tiếp theo.</small>
-        `, 'success');
-        document.getElementById('room').value = '';
-      } else {
-        showStatus('❌ Google Sheets báo lỗi: ' + data.error, 'error');
-      }
-    })
-    .catch(() => showStatus('❌ Lỗi mạng: Không kết nối được Google Sheets.', 'error'));
-  }
-
-  function showStatus(msg, type) {
-    const el = document.getElementById('status');
-    el.style.display = 'block';
-    el.className = type;
-    el.innerHTML = msg;
-  }
+/* ── Boot ── */
+initDecoder();
+loadFallback();  // preload in background regardless
 </script>
 </body>
 </html>
