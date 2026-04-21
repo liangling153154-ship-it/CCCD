@@ -21,6 +21,15 @@
     .btn-stop   { background: #e53935; color: white; flex: 1; margin-bottom: 0; }
     .btn-switch { background: #fbbc04; color: #333;  flex: 1; margin-bottom: 0; }
 
+    /* Engine badge */
+    #engine-badge {
+      display: none; text-align: center; font-size: 11px; font-weight: bold;
+      padding: 4px 10px; border-radius: 20px; margin-bottom: 10px;
+      letter-spacing: 0.5px;
+    }
+    #engine-badge.native  { background: #e8f0fe; color: #1a73e8; border: 1px solid #c5d8fb; }
+    #engine-badge.jsqr    { background: #fff3e0; color: #e65100; border: 1px solid #ffd095; }
+
     /* ── Viewfinder ── */
     #vf-wrap {
       position: relative; margin: 12px 0;
@@ -28,11 +37,7 @@
       background: #000;
       display: none;
     }
-    #vf-video {
-      display: block; width: 100%;
-      /* intentional: height set by JS after stream starts */
-    }
-    /* Canvas used for BarcodeDetector (hidden) */
+    #vf-video { display: block; width: 100%; }
     #vf-canvas { display: none; }
 
     /* 4 dim pieces */
@@ -79,6 +84,8 @@
     </svg>
   </h2>
 
+  <div id="engine-badge"></div>
+
   <label>Số phòng:</label>
   <input type="text" id="room" placeholder="Nhập số phòng (VD: 201)" autofocus />
 
@@ -92,62 +99,79 @@
     <button class="btn-switch" onclick="switchCam()">🔄 Đổi Ống Kính</button>
   </div>
 
-  <!-- Custom viewfinder (no 3rd-party library DOM) -->
   <div id="vf-wrap">
     <video id="vf-video" autoplay playsinline muted></video>
     <canvas id="vf-canvas"></canvas>
-    <!-- overlay elements injected by JS -->
   </div>
 
   <div id="status"></div>
 </div>
 
+<!-- jsQR — lightweight fallback, great on iOS Safari < 17 -->
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
 <script>
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzW5SfriqLXKG9vGLHW-0EyCzVD_B3OXimJT_4-6b-C-QN-lbqJOdl0qiCkQ4ZPVt8_FA/exec';
 
 /* ═══════════════════════════════════════════════════════
+   DETECT PLATFORM & ENGINE
+   Priority:
+   1. Native BarcodeDetector (Chrome Android / Samsung / Safari 17+ iOS) ← fastest
+   2. jsQR canvas loop (universal fallback, works on all browsers)
+═══════════════════════════════════════════════════════ */
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+// BarcodeDetector: available on Chrome Android, Samsung Browser, and Safari 17+ (iOS 17+)
+const HAS_BARCODE_DETECTOR = ('BarcodeDetector' in window);
+
+// Detect engine name for badge
+let ENGINE = HAS_BARCODE_DETECTOR
+  ? (IS_IOS ? 'Apple Vision (BarcodeDetector)' : 'Google ML Kit (BarcodeDetector)')
+  : 'jsQR (Canvas Fallback)';
+
+/* ═══════════════════════════════════════════════════════
    STATE
 ═══════════════════════════════════════════════════════ */
-let stream       = null;   // MediaStream
-let cameras      = [];
-let camIdx       = 0;
-let scanLoop     = null;   // requestAnimationFrame handle
-let scanned      = false;
-let decoder      = null;   // BarcodeDetector instance (if supported)
-let fallbackLib  = null;   // Html5Qrcode instance (fallback)
-let laserTimer   = null;
-let laserDir     = 1;
-let laserPos     = 0;
+let stream      = null;
+let cameras     = [];
+let camIdx      = 0;
+let scanLoop    = null;
+let scanned     = false;
+let decoder     = null;   // BarcodeDetector instance
+let laserTimer  = null;
+let laserDir    = 1;
+let laserPos    = 0;
+
+// jsQR timing throttle
+let lastJsqrTs  = 0;
+const JSQR_INTERVAL = IS_IOS ? 120 : 80; // ms between jsQR frames (iOS slower canvas)
 
 const video  = document.getElementById('vf-video');
 const canvas = document.getElementById('vf-canvas');
 const wrap   = document.getElementById('vf-wrap');
 const ctx    = canvas.getContext('2d', { willReadFrequently: true });
 
-/* ═══════════════════════════════════════════════════════
-   DETECT ENGINE
-   Priority:
-   1. Native BarcodeDetector (Chrome Android / Samsung)  ← fastest
-   2. html5-qrcode (cross-platform fallback)
-═══════════════════════════════════════════════════════ */
-const HAS_BARCODE_DETECTOR = ('BarcodeDetector' in window);
-
-function initDecoder() {
-  if (HAS_BARCODE_DETECTOR) {
-    decoder = new BarcodeDetector({ formats: ['qr_code'] });
-    showStatus('🚀 Dùng BarcodeDetector API (tốc độ cao nhất).', 'loading');
-  } else {
-    showStatus('⚠️ Trình duyệt không hỗ trợ BarcodeDetector, dùng fallback.', 'loading');
-    loadFallback();
-  }
+/* ── Show engine badge ── */
+function showEngineBadge() {
+  const badge = document.getElementById('engine-badge');
+  badge.style.display = 'block';
+  badge.className = HAS_BARCODE_DETECTOR ? 'native' : 'jsqr';
+  badge.textContent = HAS_BARCODE_DETECTOR
+    ? (IS_IOS ? '🍎 Apple Vision API' : '🤖 Google ML Kit API')
+    : '📦 jsQR Engine (Canvas)';
 }
 
-function loadFallback() {
-  if (window.Html5Qrcode) return;
-  const s = document.createElement('script');
-  s.src = 'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
-  s.onload = () => console.log('html5-qrcode loaded');
-  document.head.appendChild(s);
+/* ═══════════════════════════════════════════════════════
+   INIT DECODER
+═══════════════════════════════════════════════════════ */
+function initDecoder() {
+  showEngineBadge();
+  if (HAS_BARCODE_DETECTOR) {
+    decoder = new BarcodeDetector({ formats: ['qr_code'] });
+    console.log('[QR] Engine: BarcodeDetector —', ENGINE);
+  } else {
+    console.log('[QR] Engine: jsQR canvas loop');
+  }
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -165,7 +189,6 @@ function scoreCam(label) {
 async function getCameras() {
   const devices = await navigator.mediaDevices.enumerateDevices();
   cameras = devices.filter(d => d.kind === 'videoinput');
-  // pick best rear cam
   let best = 0;
   for (let i = 1; i < cameras.length; i++) {
     if (scoreCam(cameras[i].label) > scoreCam(cameras[best].label)) best = i;
@@ -176,13 +199,16 @@ async function getCameras() {
 async function openCamera(deviceId) {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
 
+  // iOS Safari: avoid advanced constraints that cause errors
+  const advanced = IS_IOS ? [] : [{ focusMode: 'continuous' }];
+
   const constraints = {
     video: {
       deviceId: deviceId ? { exact: deviceId } : undefined,
       facingMode: deviceId ? undefined : 'environment',
       width:  { ideal: 1920 },
       height: { ideal: 1080 },
-      advanced: [{ focusMode: 'continuous' }]
+      ...(advanced.length ? { advanced } : {})
     }
   };
 
@@ -190,27 +216,42 @@ async function openCamera(deviceId) {
   video.srcObject = stream;
   await video.play();
 
-  // Apply hardware zoom (3×) if supported
-  const track = stream.getVideoTracks()[0];
-  const caps  = track.getCapabilities ? track.getCapabilities() : {};
-  if (caps.zoom) {
-    const z = Math.min(3, caps.zoom.max ?? 3);
-    if (z > (caps.zoom.min ?? 1)) {
-      await track.applyConstraints({ advanced: [{ zoom: z }] });
+  // Hardware zoom — skip on iOS (crashes some models)
+  if (!IS_IOS) {
+    const track = stream.getVideoTracks()[0];
+    const caps  = track.getCapabilities ? track.getCapabilities() : {};
+    if (caps.zoom) {
+      const z = Math.min(3, caps.zoom.max ?? 3);
+      if (z > (caps.zoom.min ?? 1)) {
+        await track.applyConstraints({ advanced: [{ zoom: z }] }).catch(()=>{});
+      }
     }
   }
 
-  // Size the viewfinder container to match rendered video
   wrap.style.display = 'block';
-  // Let the video establish dimensions then draw overlay
   setTimeout(drawOverlay, 400);
+
+  // iOS: tap-to-focus workaround (triggers autofocus on tap)
+  if (IS_IOS) {
+    wrap.addEventListener('click', iosFocusTap, { once: false });
+  }
+}
+
+// iOS tap-to-focus: briefly restart stream track to force refocus
+async function iosFocusTap() {
+  if (!stream) return;
+  const track = stream.getVideoTracks()[0];
+  if (!track) return;
+  try {
+    await track.applyConstraints({ advanced: [{ focusMode: 'auto' }] });
+    setTimeout(() => track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(()=>{}), 300);
+  } catch(_) {}
 }
 
 /* ═══════════════════════════════════════════════════════
-   SCAN LOOP  —  BarcodeDetector path
-   We decode directly from the live <video> element.
-   BarcodeDetector.detect(video) uses the GPU/ML accelerator;
-   it does NOT need us to draw to canvas first.
+   SCAN LOOP — BarcodeDetector (native, fastest)
+   Works on: Chrome Android, Samsung Browser, Safari 17+ (iOS 17+)
+   Apple uses Vision framework under the hood — comparable to ML Kit.
 ═══════════════════════════════════════════════════════ */
 function startNativeLoop() {
   if (scanLoop) cancelAnimationFrame(scanLoop);
@@ -220,10 +261,7 @@ function startNativeLoop() {
     if (video.readyState >= 2) {
       try {
         const codes = await decoder.detect(video);
-        if (codes.length > 0) {
-          onDecoded(codes[0].rawValue);
-          return;   // stop loop
-        }
+        if (codes.length > 0) { onDecoded(codes[0].rawValue); return; }
       } catch(_) {}
     }
     scanLoop = requestAnimationFrame(tick);
@@ -232,35 +270,46 @@ function startNativeLoop() {
 }
 
 /* ═══════════════════════════════════════════════════════
-   SCAN LOOP  —  html5-qrcode fallback
-   Mount a hidden html5-qrcode instance on a throwaway div.
+   SCAN LOOP — jsQR (universal canvas fallback)
+   Works on: all browsers including older iOS Safari
+   Draws video frame to hidden canvas, feeds pixel data to jsQR.
+   Throttled to JSQR_INTERVAL ms to avoid melting old iPhones.
 ═══════════════════════════════════════════════════════ */
-function startFallbackLoop(deviceId) {
-  // Create a hidden container for html5-qrcode
-  let fb = document.getElementById('_fb');
-  if (!fb) { fb = document.createElement('div'); fb.id = '_fb'; fb.style.display='none'; document.body.appendChild(fb); }
+function startJsqrLoop() {
+  if (scanLoop) cancelAnimationFrame(scanLoop);
 
-  if (fallbackLib) { try { fallbackLib.stop().catch(()=>{}); } catch(_){} }
+  function tick(ts) {
+    if (!stream || scanned) return;
+    if (video.readyState < 2) { scanLoop = requestAnimationFrame(tick); return; }
 
-  fallbackLib = new Html5Qrcode('_fb', {
-    formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
-    useBarCodeDetectorIfSupported: true,
-    verbose: false
-  });
+    // Throttle
+    if (ts - lastJsqrTs >= JSQR_INTERVAL) {
+      lastJsqrTs = ts;
 
-  const cfg = deviceId ? deviceId : { facingMode: 'environment' };
-  fallbackLib.start(cfg, {
-    fps: 15,
-    qrbox: { width: 300, height: 300 },
-    videoConstraints: { width:{ideal:1920}, height:{ideal:1080}, advanced:[{focusMode:'continuous'}] }
-  }, text => onDecoded(text), ()=>{});
+      const W = video.videoWidth;
+      const H = video.videoHeight;
+      if (W && H) {
+        canvas.width  = W;
+        canvas.height = H;
+        ctx.drawImage(video, 0, 0, W, H);
+        try {
+          const imageData = ctx.getImageData(0, 0, W, H);
+          const result = jsQR(imageData.data, W, H, {
+            inversionAttempts: 'dontInvert'
+          });
+          if (result) { onDecoded(result.data); return; }
+        } catch(_) {}
+      }
+    }
+    scanLoop = requestAnimationFrame(tick);
+  }
+  scanLoop = requestAnimationFrame(tick);
 }
 
 /* ═══════════════════════════════════════════════════════
-   OVERLAY  —  custom viewfinder on top of <video>
+   OVERLAY — custom viewfinder
 ═══════════════════════════════════════════════════════ */
 function drawOverlay() {
-  // Remove old overlay
   wrap.querySelectorAll('.ov,.corner,#laser,#tip,.box-frame').forEach(e => e.remove());
   if (laserTimer) { clearInterval(laserTimer); laserTimer = null; }
 
@@ -279,14 +328,12 @@ function drawOverlay() {
     return el;
   };
 
-  // 4 dim panes
   const base = { position:'absolute', pointerEvents:'none' };
-  mk('div', {...base, top:'0',     left:'0', right:'0',   height: bT+'px',             background:'rgba(0,0,0,0.5)'   }).className='ov';
-  mk('div', {...base, bottom:'0',  left:'0', right:'0',   height: (H-bT-side)+'px',    background:'rgba(0,0,0,0.5)'   }).className='ov';
-  mk('div', {...base, top:bT+'px', left:'0', width:bL+'px', height:side+'px',           background:'rgba(0,0,0,0.5)'   }).className='ov';
-  mk('div', {...base, top:bT+'px', right:'0', width:(W-bL-side)+'px', height:side+'px', background:'rgba(0,0,0,0.5)'  }).className='ov';
+  mk('div', {...base, top:'0',     left:'0', right:'0',   height: bT+'px',             background:'rgba(0,0,0,0.5)'}).className='ov';
+  mk('div', {...base, bottom:'0',  left:'0', right:'0',   height: (H-bT-side)+'px',    background:'rgba(0,0,0,0.5)'}).className='ov';
+  mk('div', {...base, top:bT+'px', left:'0', width:bL+'px', height:side+'px',           background:'rgba(0,0,0,0.5)'}).className='ov';
+  mk('div', {...base, top:bT+'px', right:'0', width:(W-bL-side)+'px', height:side+'px', background:'rgba(0,0,0,0.5)'}).className='ov';
 
-  // Corner bracket container
   const frame = mk('div', { ...base, top:bT+'px', left:bL+'px', width:side+'px', height:side+'px' });
   frame.className = 'box-frame';
   ['corner-tl','corner-tr','corner-bl','corner-br'].forEach(c => {
@@ -295,8 +342,9 @@ function drawOverlay() {
     frame.appendChild(d);
   });
 
-  // Laser line
-  const laser = mk('div', { ...base, id:'laser', left:bL+'px', width:side+'px', top:bT+'px' });
+  const laser = mk('div', { ...base, left:bL+'px', width:side+'px', top:bT+'px', height:'2px',
+    background:'linear-gradient(to right, transparent, #1a73e8 25%, #1a73e8 75%, transparent)',
+    boxShadow:'0 0 6px 2px rgba(26,115,232,0.6)' });
   laser.id = 'laser';
   laserDir = 1; laserPos = 0;
   laserTimer = setInterval(() => {
@@ -307,10 +355,13 @@ function drawOverlay() {
     laser.style.top = (bT + laserPos) + 'px';
   }, 16);
 
-  // Tip
-  const tip = mk('div', { ...base, bottom:'0', left:'0', right:'0', background:'rgba(0,0,0,0.6)', color:'#ffffffcc', fontSize:'12px', textAlign:'center', padding:'6px' });
+  const tip = mk('div', { ...base, bottom:'0', left:'0', right:'0',
+    background:'rgba(0,0,0,0.6)', color:'#ffffffcc',
+    fontSize:'12px', textAlign:'center', padding:'6px' });
   tip.id = 'tip';
-  tip.textContent = '💡 Đưa QR vào khung · cách 15-20cm · giữ thẳng tay';
+  tip.textContent = IS_IOS
+    ? '💡 Đưa QR vào khung · Chạm để lấy nét · Giữ thẳng tay'
+    : '💡 Đưa QR vào khung · cách 15-20cm · giữ thẳng tay';
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -321,27 +372,25 @@ async function startScan() {
   if (!room) { alert('Vui lòng nhập số phòng trước!'); return; }
 
   scanned = false;
-  document.getElementById('btnScan').style.display   = 'none';
-  document.getElementById('btnUpload').style.display = 'none';
+  document.getElementById('btnScan').style.display    = 'none';
+  document.getElementById('btnUpload').style.display  = 'none';
   document.getElementById('actionBtns').style.display = 'flex';
   showStatus('⏳ Đang khởi động camera...', 'loading');
 
   try {
     await getCameras();
     const devId = cameras[camIdx]?.deviceId;
+    await openCamera(devId);
 
     if (HAS_BARCODE_DETECTOR) {
-      await openCamera(devId);
       startNativeLoop();
-      showStatus('📷 BarcodeDetector — đưa QR vào khung.', 'loading');
+      showStatus(`📷 ${IS_IOS ? '🍎 Apple Vision' : '🤖 ML Kit'} — đưa QR vào khung.`, 'loading');
     } else {
-      // Fallback: open camera via html5-qrcode (manages its own video)
-      wrap.style.display = 'none';  // hide our custom video; library uses its own
-      startFallbackLoop(devId);
-      showStatus('📷 Đưa QR vào khung.', 'loading');
+      startJsqrLoop();
+      showStatus('📷 jsQR — đưa QR vào khung.', 'loading');
     }
   } catch(err) {
-    showStatus('❌ Lỗi mở camera: ' + err, 'error');
+    showStatus('❌ Lỗi mở camera: ' + err.message, 'error');
   }
 }
 
@@ -350,24 +399,20 @@ async function switchCam() {
   camIdx = (camIdx + 1) % cameras.length;
   if (scanLoop) { cancelAnimationFrame(scanLoop); scanLoop = null; }
   await openCamera(cameras[camIdx].deviceId);
-  if (HAS_BARCODE_DETECTOR) startNativeLoop();
+  if (HAS_BARCODE_DETECTOR) startNativeLoop(); else startJsqrLoop();
 }
 
 function stopScan() {
-  // Stop native loop
-  if (scanLoop) { cancelAnimationFrame(scanLoop); scanLoop = null; }
-  // Stop stream tracks
-  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  if (scanLoop)  { cancelAnimationFrame(scanLoop); scanLoop = null; }
+  if (stream)    { stream.getTracks().forEach(t => t.stop()); stream = null; }
   video.srcObject = null;
-  // Stop fallback lib
-  if (fallbackLib) { try { fallbackLib.stop().catch(()=>{}); } catch(_){} fallbackLib = null; }
-  // Clean up overlay
   wrap.querySelectorAll('.ov,.corner,#laser,#tip,.box-frame').forEach(e => e.remove());
   if (laserTimer) { clearInterval(laserTimer); laserTimer = null; }
+  wrap.removeEventListener('click', iosFocusTap);
   wrap.style.display = 'none';
 
-  document.getElementById('btnScan').style.display   = 'block';
-  document.getElementById('btnUpload').style.display = 'block';
+  document.getElementById('btnScan').style.display    = 'block';
+  document.getElementById('btnUpload').style.display  = 'block';
   document.getElementById('actionBtns').style.display = 'none';
 }
 
@@ -386,18 +431,28 @@ async function handleFile(event) {
     try {
       const bmp = await createImageBitmap(file);
       const codes = await decoder.detect(bmp);
-      if (codes.length) { onDecoded(codes[0].rawValue); }
+      if (codes.length) onDecoded(codes[0].rawValue);
       else showStatus('❌ Không tìm thấy QR. Thử crop ảnh gần hơn.', 'error');
     } catch(e) {
-      showStatus('❌ Lỗi đọc ảnh: ' + e, 'error');
+      showStatus('❌ Lỗi đọc ảnh: ' + e.message, 'error');
     }
   } else {
-    // fallback via html5-qrcode file scan
-    if (!window.Html5Qrcode) { showStatus('⏳ Đang tải thư viện, thử lại sau 2s...','loading'); return; }
-    const tmp = new Html5Qrcode('_tmp_' + Date.now());
-    tmp.scanFile(file, false)
-      .then(t => onDecoded(t))
-      .catch(() => showStatus('❌ Không tìm thấy QR.', 'error'));
+    // jsQR file scan
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const cx = c.getContext('2d');
+      cx.drawImage(img, 0, 0);
+      const id = cx.getImageData(0, 0, c.width, c.height);
+      const result = jsQR(id.data, c.width, c.height, { inversionAttempts: 'attemptBoth' });
+      URL.revokeObjectURL(url);
+      if (result) onDecoded(result.data);
+      else showStatus('❌ Không tìm thấy QR. Thử crop ảnh gần hơn.', 'error');
+    };
+    img.onerror = () => showStatus('❌ Lỗi đọc ảnh.', 'error');
+    img.src = url;
   }
   event.target.value = '';
 }
@@ -445,7 +500,6 @@ function showStatus(msg, type) {
 
 /* ── Boot ── */
 initDecoder();
-loadFallback();  // preload in background regardless
 </script>
 </body>
 </html>
